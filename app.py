@@ -521,7 +521,7 @@ else:
                 else:
                     tipo = "RECEBIMENTO ⬇️"
                     outro = f"De: {sender}"
-                    val_str = f"+{amount:.2f} B+"
+                    val_str = f"+{amount_num:.2f} B+"
                 
                 records.append({
                     "Tipo": tipo,
