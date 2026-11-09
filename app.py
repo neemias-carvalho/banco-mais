@@ -17,7 +17,7 @@ def get_db():
     try:
         db_url = st.secrets["postgres_url"]
     except Exception:
-        db_url = "postgresql://postgres:BLkJh8ACFA2N2g@db.qubswavybduwpoumwfle.supabase.co:5432/postgres"
+        db_url = "postgresql://postgres:BLkJh8ACFA2N2g@db.qubswavybduwpoumwfle.supabase.co:6543/postgres"
         
     conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
