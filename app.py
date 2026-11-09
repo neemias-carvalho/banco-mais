@@ -13,11 +13,10 @@ st.set_page_config(page_title="B+ Bank", page_icon="🪙", layout="centered")
 # 1. BANCO DE DADOS POSTGRESQL (psycopg2)
 # ==========================================
 def get_db():
-    # Busca a URL de conexão configurada nos Secrets do Streamlit ou usa fallback local
     try:
         db_url = st.secrets["postgres_url"]
     except Exception:
-        db_url = "postgresql://postgres.qubswavybduwpoumwfle:BLkJh8ACFA2N2g@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+        db_url = "postgresql://postgres:senha@localhost:5432/b_plus_bank"
         
     conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
@@ -39,7 +38,6 @@ def init_db():
     try:
         with conn:
             with conn.cursor() as cursor:
-                # Tabela de Escolas
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS schools (
                         id SERIAL PRIMARY KEY,
@@ -47,7 +45,6 @@ def init_db():
                     )
                 ''')
 
-                # Tabela de Classes / Turmas
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS classes (
                         id SERIAL PRIMARY KEY,
@@ -56,7 +53,6 @@ def init_db():
                     )
                 ''')
 
-                # Tabela de Usuários
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS users (
                         id SERIAL PRIMARY KEY,
@@ -70,7 +66,6 @@ def init_db():
                     )
                 ''')
 
-                # Tabela de Transações
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS transactions (
                         id SERIAL PRIMARY KEY,
@@ -82,7 +77,6 @@ def init_db():
                     )
                 ''')
                 
-                # Admin Default (admin / b@nc0m@15)
                 cursor.execute("SELECT id FROM users WHERE username = %s", ("admin",))
                 if not cursor.fetchone():
                     salt_hex, hash_hex = hash_password("b@nc0m@15")
@@ -188,7 +182,7 @@ def login_user(username, password):
             if user and verify_password(user["salt"], user["password_hash"], password):
                 return True, {
                     "username": user["username"], 
-                    "balance": user["balance"], 
+                    "balance": float(user["balance"]), 
                     "user_type": user["user_type"]
                 }
         return False, "Usuário ou senha incorretos."
@@ -210,7 +204,14 @@ def get_all_students():
                 WHERE u.user_type = 1 
                 ORDER BY u.id ASC
             ''')
-            return cursor.fetchall()
+            rows = cursor.fetchall()
+            # Garante que os saldos sejam convertidos para float antes do Pandas exibir
+            students = []
+            for r in rows:
+                r_dict = dict(r)
+                r_dict["Saldo (B+)"] = float(r_dict["Saldo (B+)"])
+                students.append(r_dict)
+            return students
     finally:
         conn.close()
 
@@ -229,7 +230,7 @@ def get_balance(username):
         with conn.cursor() as cursor:
             cursor.execute("SELECT balance FROM users WHERE username = %s", (username,))
             res = cursor.fetchone()
-            return res["balance"] if res else 0.0
+            return float(res["balance"]) if res else 0.0
     finally:
         conn.close()
 
@@ -237,6 +238,7 @@ def transfer_b_plus(sender, receiver, amount):
     if not receiver:
         return False, "Selecione um destinatário válido."
     receiver = receiver.strip()
+    amount = float(amount)
     if amount <= 0:
         return False, "O valor deve ser maior que zero."
     if sender.lower() == receiver.lower():
@@ -252,7 +254,7 @@ def transfer_b_plus(sender, receiver, amount):
                     return False, "Usuário destinatário não existe."
 
                 cursor.execute("SELECT balance FROM users WHERE username = %s", (sender,))
-                sender_bal = cursor.fetchone()["balance"]
+                sender_bal = float(cursor.fetchone()["balance"])
                 
                 if sender_bal < amount:
                     return False, f"Saldo insuficiente! Saldo atual: {sender_bal:.2f} B+."
@@ -270,6 +272,7 @@ def transfer_b_plus(sender, receiver, amount):
         conn.close()
 
 def withdraw_b_plus(username, amount):
+    amount = float(amount)
     if amount <= 0:
         return False, "O valor do saque deve ser maior que zero."
 
@@ -282,7 +285,7 @@ def withdraw_b_plus(username, amount):
                 if not res:
                     return False, "Usuário não encontrado."
 
-                current_balance = res["balance"]
+                current_balance = float(res["balance"])
                 if current_balance < amount:
                     return False, f"Saldo insuficiente! Saldo disponível: {current_balance:.2f} B+."
 
@@ -384,7 +387,6 @@ elif st.session_state["user_type"] == 2:
         "📋 Lista de Alunos"
     ])
 
-    # Tab 1: Cadastrar Escola
     with tab_schools:
         st.subheader("Cadastrar Nova Escola")
         school_name = st.text_input("Nome da Escola", placeholder="Ex: Escola Estadual Machado de Assis")
@@ -395,7 +397,6 @@ elif st.session_state["user_type"] == 2:
             else:
                 st.error(f"❌ {msg}")
 
-    # Tab 2: Cadastrar Turma
     with tab_classes:
         st.subheader("Cadastrar Nova Classe / Turma")
         schools = get_schools()
@@ -413,7 +414,6 @@ elif st.session_state["user_type"] == 2:
                 else:
                     st.error(f"❌ {msg}")
 
-    # Tab 3: Cadastrar Aluno
     with tab_students:
         st.subheader("Cadastrar Novo Aluno")
         schools = get_schools()
@@ -444,20 +444,19 @@ elif st.session_state["user_type"] == 2:
                     else:
                         st.error(f"❌ {msg}")
 
-    # Tab 4: Lista de Alunos
     with tab_list:
         st.subheader("Lista de Alunos Cadastrados")
         students = get_all_students()
         if not students:
             st.info("Nenhum aluno cadastrado no momento.")
         else:
-            df = pd.DataFrame([dict(s) for s in students])
+            df = pd.DataFrame(students)
             st.dataframe(df, use_container_width=True, hide_index=True)
 
 # --- PAINEL DO ALUNO (Tipo 1) ---
 else:
     current_user = st.session_state["user"]
-    balance = get_balance(current_user)
+    balance = float(get_balance(current_user))
 
     st.sidebar.title("👋 Menu do Aluno")
     st.sidebar.write(f"Usuário: **{current_user}**")
@@ -474,7 +473,6 @@ else:
         "🔑 Alterar Senha"
     ])
 
-    # Tab 1: Transferência
     with tab_transfer:
         st.subheader("Transferência de B+")
         other_users = get_other_users(current_user)
@@ -492,10 +490,9 @@ else:
                 else:
                     st.error(f"❌ {msg}")
 
-    # Tab 2: Saque
     with tab_withdraw:
         st.subheader("Sacar B+")
-        valor_saque = st.number_input("Valor do Saque (B+)", min_value=1.0, max_value=float(balance) if balance > 0 else 1.0, value=10.0, step=5.0)
+        valor_saque = st.number_input("Valor do Saque (B+)", min_value=1.0, max_value=max(1.0, balance), value=10.0, step=5.0)
         
         if st.button("Confirmar Saque", type="primary"):
             success, msg = withdraw_b_plus(current_user, valor_saque)
@@ -505,7 +502,6 @@ else:
             else:
                 st.error(f"❌ {msg}")
 
-    # Tab 3: Extrato
     with tab_history:
         st.subheader("Extrato de Transações")
         history = get_history(current_user)
@@ -514,27 +510,27 @@ else:
         else:
             records = []
             for sender, receiver, amount, timestamp, desc in history:
+                amt = float(amount)
                 if sender == current_user:
                     tipo = "ENVIO ⬆️"
                     outro = f"Para: {receiver}"
-                    val_str = f"-{amount:.2f} B+"
+                    val_str = f"-{amt:.2f} B+"
                 else:
                     tipo = "RECEBIMENTO ⬇️"
                     outro = f"De: {sender}"
-                    val_str = f'+{amount:.2f} B+'
+                    val_str = f"+{amt:.2f} B+"
                 
                 records.append({
                     "Tipo": tipo,
                     "Origem/Destino": outro,
                     "Descrição": desc,
                     "Valor": val_str,
-                    "Data/Hora": timestamp
+                    "Data/Hora": str(timestamp)
                 })
             
             df_hist = pd.DataFrame(records)
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
-    # Tab 4: Alterar Senha
     with tab_settings:
         st.subheader("Alterar Senha")
         old_p = st.text_input("Senha Atual", type="password")
