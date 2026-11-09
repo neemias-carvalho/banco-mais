@@ -205,7 +205,6 @@ def get_all_students():
                 ORDER BY u.id ASC
             ''')
             rows = cursor.fetchall()
-            # Garante que os saldos sejam convertidos para float antes do Pandas exibir
             students = []
             for r in rows:
                 r_dict = dict(r)
@@ -509,8 +508,13 @@ else:
             st.info("Nenhuma movimentação realizada ainda.")
         else:
             records = []
-            for sender, receiver, amount, timestamp, desc in history:
-                amt = float(amount)
+            for row in history:
+                sender = row["sender"]
+                receiver = row["receiver"]
+                amt = float(row["amount"])
+                timestamp = row["timestamp"]
+                desc = row["description"]
+
                 if sender == current_user:
                     tipo = "ENVIO ⬆️"
                     outro = f"Para: {receiver}"
