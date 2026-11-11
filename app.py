@@ -16,7 +16,7 @@ def get_db():
     try:
         db_url = st.secrets["postgres_url"]
     except Exception:
-        db_url = "postgresql://postgres.qubswavybduwpoumwfle:BLkJh8ACFA2N2g@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+        db_url = "postgresql://postgres:senha@localhost:5432/b_plus_bank"
         
     conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
@@ -77,6 +77,7 @@ def init_db():
                     )
                 ''')
                 
+                # Admin Default (admin / b@nc0m@15)
                 cursor.execute("SELECT id FROM users WHERE username = %s", ("admin",))
                 if not cursor.fetchone():
                     salt_hex, hash_hex = hash_password("b@nc0m@15")
@@ -138,6 +139,49 @@ def get_classes_by_school(school_id):
     finally:
         conn.close()
 
+def get_school_and_class_names(school_id, class_id):
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT name FROM schools WHERE id = %s", (school_id,))
+            sch = cursor.fetchone()
+            cursor.execute("SELECT name FROM classes WHERE id = %s", (class_id,))
+            cls = cursor.fetchone()
+            school_name = sch["name"] if sch else "N/A"
+            class_name = cls["name"] if cls else "N/A"
+            return school_name, class_name
+    finally:
+        conn.close()
+
+def register_teacher(username, password, confirm_password, school_id, class_id):
+    username = username.strip()
+    if not username or not password:
+        return False, "Usuário e senha são obrigatórios."
+    if len(username) < 3:
+        return False, "O usuário deve ter pelo menos 3 caracteres."
+    if len(password) < 4:
+        return False, "A senha deve ter pelo menos 4 caracteres."
+    if password != confirm_password:
+        return False, "As senhas não coincidem."
+    if not school_id or not class_id:
+        return False, "A seleção da escola e da classe é obrigatória."
+
+    salt_hex, hash_hex = hash_password(password)
+    conn = get_db()
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO users (username, salt, password_hash, balance, user_type, school_id, class_id) 
+                       VALUES (%s, %s, %s, %s, 3, %s, %s)""",
+                    (username, salt_hex, hash_hex, 0.0, school_id, class_id)
+                )
+                return True, f"Professor '{username}' cadastrado com sucesso!"
+    except psycopg2.IntegrityError:
+        return False, "Nome de usuário já está em uso."
+    finally:
+        conn.close()
+
 def register_student(username, password, confirm_password, school_id, class_id):
     username = username.strip()
     if not username or not password:
@@ -176,14 +220,19 @@ def login_user(username, password):
     conn = get_db()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT username, salt, password_hash, balance, user_type FROM users WHERE username = %s", (username,))
+            cursor.execute(
+                "SELECT username, salt, password_hash, balance, user_type, school_id, class_id FROM users WHERE username = %s", 
+                (username,)
+            )
             user = cursor.fetchone()
             
             if user and verify_password(user["salt"], user["password_hash"], password):
                 return True, {
                     "username": user["username"], 
                     "balance": float(user["balance"]), 
-                    "user_type": user["user_type"]
+                    "user_type": user["user_type"],
+                    "school_id": user["school_id"],
+                    "class_id": user["class_id"]
                 }
         return False, "Usuário ou senha incorretos."
     finally:
@@ -204,6 +253,31 @@ def get_all_students():
                 WHERE u.user_type = 1 
                 ORDER BY u.id ASC
             ''')
+            rows = cursor.fetchall()
+            students = []
+            for r in rows:
+                r_dict = dict(r)
+                r_dict["Saldo (B+)"] = float(r_dict["Saldo (B+)"])
+                students.append(r_dict)
+            return students
+    finally:
+        conn.close()
+
+def get_students_by_school(school_id):
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT u.id AS ID, u.username AS Aluno, 
+                       COALESCE(s.name, 'N/A') AS Escola, 
+                       COALESCE(c.name, 'N/A') AS Classe,
+                       u.balance AS "Saldo (B+)"
+                FROM users u 
+                LEFT JOIN schools s ON u.school_id = s.id 
+                LEFT JOIN classes c ON u.class_id = c.id 
+                WHERE u.user_type = 1 AND u.school_id = %s
+                ORDER BY u.id ASC
+            ''', (school_id,))
             rows = cursor.fetchall()
             students = []
             for r in rows:
@@ -342,10 +416,16 @@ if "user" not in st.session_state:
     st.session_state["user"] = None
 if "user_type" not in st.session_state:
     st.session_state["user_type"] = 1
+if "school_id" not in st.session_state:
+    st.session_state["school_id"] = None
+if "class_id" not in st.session_state:
+    st.session_state["class_id"] = None
 
 def logout():
     st.session_state["user"] = None
     st.session_state["user_type"] = 1
+    st.session_state["school_id"] = None
+    st.session_state["class_id"] = None
     st.rerun()
 
 # ==========================================
@@ -366,6 +446,8 @@ if st.session_state["user"] is None:
             if success:
                 st.session_state["user"] = res["username"]
                 st.session_state["user_type"] = res["user_type"]
+                st.session_state["school_id"] = res["school_id"]
+                st.session_state["class_id"] = res["class_id"]
                 st.rerun()
             else:
                 st.error(f"❌ {res}")
@@ -379,9 +461,10 @@ elif st.session_state["user_type"] == 2:
 
     st.title("🛡️ Administração B+ Bank")
     
-    tab_schools, tab_classes, tab_students, tab_list = st.tabs([
+    tab_schools, tab_classes, tab_teachers, tab_students, tab_list = st.tabs([
         "🏫 Escolas", 
         "📚 Turmas", 
+        "👨‍🏫 Cadastrar Professor",
         "➕ Cadastrar Aluno", 
         "📋 Lista de Alunos"
     ])
@@ -403,7 +486,7 @@ elif st.session_state["user_type"] == 2:
             st.warning("Cadastre primeiro pelo menos uma escola na aba 'Escolas'.")
         else:
             school_dict = {s['name']: s['id'] for s in schools}
-            sel_school = st.selectbox("Selecione a Escola", list(school_dict.keys()))
+            sel_school = st.selectbox("Selecione a Escola", list(school_dict.keys()), key="class_school_select")
             class_name = st.text_input("Nome da Classe", placeholder="Ex: 5º Ano A")
             
             if st.button("Salvar Classe", type="primary"):
@@ -412,6 +495,36 @@ elif st.session_state["user_type"] == 2:
                     st.success(f"✅ {msg}")
                 else:
                     st.error(f"❌ {msg}")
+
+    with tab_teachers:
+        st.subheader("Cadastrar Novo Professor")
+        schools = get_schools()
+        if not schools:
+            st.warning("Cadastre escolas e turmas antes de adicionar professores.")
+        else:
+            school_dict = {s['name']: s['id'] for s in schools}
+            sel_school_teacher = st.selectbox("Escola do Professor", list(school_dict.keys()), key="teacher_school")
+            
+            classes = get_classes_by_school(school_dict[sel_school_teacher])
+            if not classes:
+                st.warning("Nenhuma turma cadastrada para esta escola.")
+            else:
+                class_dict = {c['name']: c['id'] for c in classes}
+                sel_class_teacher = st.selectbox("Classe/Turma do Professor", list(class_dict.keys()), key="teacher_class")
+                
+                prof_user = st.text_input("Usuário do Professor", key="prof_user")
+                prof_pass = st.text_input("Senha", type="password", key="prof_pass")
+                prof_pass_conf = st.text_input("Confirmar Senha", type="password", key="prof_pass_conf")
+                
+                if st.button("Salvar Professor", type="primary"):
+                    success, msg = register_teacher(
+                        prof_user, prof_pass, prof_pass_conf, 
+                        school_dict[sel_school_teacher], class_dict[sel_class_teacher]
+                    )
+                    if success:
+                        st.success(f"✅ {msg}")
+                    else:
+                        st.error(f"❌ {msg}")
 
     with tab_students:
         st.subheader("Cadastrar Novo Aluno")
@@ -451,6 +564,67 @@ elif st.session_state["user_type"] == 2:
         else:
             df = pd.DataFrame(students)
             st.dataframe(df, use_container_width=True, hide_index=True)
+
+# --- PAINEL DO PROFESSOR (Tipo 3) ---
+elif st.session_state["user_type"] == 3:
+    current_user = st.session_state["user"]
+    teacher_school_id = st.session_state["school_id"]
+    teacher_class_id = st.session_state["class_id"]
+
+    school_name, class_name = get_school_and_class_names(teacher_school_id, teacher_class_id)
+
+    st.sidebar.title("👨‍🏫 Painel do Professor")
+    st.sidebar.write(f"Professor: **{current_user}**")
+    st.sidebar.write(f"Escola: **{school_name}**")
+    st.sidebar.write(f"Turma: **{class_name}**")
+    if st.sidebar.button("Sair", type="secondary", use_container_width=True):
+        logout()
+
+    st.title("👨‍🏫 Portal do Professor")
+    st.info(f"📍 **Escola Vinculada:** {school_name} | **Turma:** {class_name}")
+
+    tab_add_student, tab_school_students, tab_settings = st.tabs([
+        "➕ Cadastrar Aluno", 
+        "📋 Alunos da Escola", 
+        "🔑 Alterar Senha"
+    ])
+
+    with tab_add_student:
+        st.subheader(f"Cadastrar Aluno em {class_name}")
+        std_user = st.text_input("Usuário do Aluno", key="t_std_user")
+        std_pass = st.text_input("Senha", type="password", key="t_std_pass")
+        std_pass_conf = st.text_input("Confirmar Senha", type="password", key="t_std_pass_conf")
+        
+        if st.button("Cadastrar Aluno", type="primary"):
+            success, msg = register_student(
+                std_user, std_pass, std_pass_conf, 
+                teacher_school_id, teacher_class_id
+            )
+            if success:
+                st.success(f"✅ {msg}")
+            else:
+                st.error(f"❌ {msg}")
+
+    with tab_school_students:
+        st.subheader(f"Alunos da Escola ({school_name})")
+        students = get_students_by_school(teacher_school_id)
+        if not students:
+            st.info("Nenhum aluno cadastrado nesta escola ainda.")
+        else:
+            df = pd.DataFrame(students)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+    with tab_settings:
+        st.subheader("Alterar Senha")
+        old_p = st.text_input("Senha Atual", type="password", key="t_old_p")
+        new_p = st.text_input("Nova Senha", type="password", key="t_new_p")
+        
+        if st.button("Salvar Nova Senha", type="primary"):
+            success, msg = change_password(current_user, old_p, new_p)
+            if success:
+                st.success(f"✅ {msg}")
+            else:
+                st.error(f"❌ {msg}")
 
 # --- PAINEL DO ALUNO (Tipo 1) ---
 else:
@@ -537,8 +711,8 @@ else:
 
     with tab_settings:
         st.subheader("Alterar Senha")
-        old_p = st.text_input("Senha Atual", type="password")
-        new_p = st.text_input("Nova Senha", type="password")
+        old_p = st.text_input("Senha Atual", type="password", key="s_old_p")
+        new_p = st.text_input("Nova Senha", type="password", key="s_new_p")
         
         if st.button("Salvar Nova Senha", type="primary"):
             success, msg = change_password(current_user, old_p, new_p)
