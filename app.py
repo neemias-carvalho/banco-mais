@@ -289,6 +289,15 @@ def get_all_students():
     finally:
         conn.close()
 
+def get_all_student_usernames():
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT username FROM users WHERE user_type = 1 ORDER BY username ASC")
+            return [row["username"] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
 def get_students_by_school(school_id):
     conn = get_db()
     try:
@@ -333,7 +342,35 @@ def get_balance(username):
     finally:
         conn.close()
 
-def transfer_b_plus(sender, receiver, amount):
+def deposit_b_plus(username, amount, admin_user="ADMIN"):
+    if not username:
+        return False, "Selecione um aluno válido."
+    username = username.strip()
+    amount = float(amount)
+    if amount <= 0:
+        return False, "O valor do depósito deve ser maior que zero."
+
+    conn = get_db()
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT balance FROM users WHERE username = %s AND user_type = 1", (username,))
+                res = cursor.fetchone()
+                if not res:
+                    return False, "Aluno não encontrado."
+
+                cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, username))
+                cursor.execute(
+                    "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
+                    ("ADMIN / DEPÓSITO", username, amount, f"Depósito efetuado pelo admin ({admin_user})")
+                )
+                return True, f"Depósito de {amount:.2f} B+ realizado com sucesso para {username}!"
+    except Exception as e:
+        return False, f"Erro ao processar o depósito: {str(e)}"
+    finally:
+        conn.close()
+
+def transfer_b_plus(sender, receiver, amount, description="Transferência efetuada"):
     if not receiver:
         return False, "Selecione um destinatário válido."
     receiver = receiver.strip()
@@ -341,7 +378,7 @@ def transfer_b_plus(sender, receiver, amount):
     if amount <= 0:
         return False, "O valor deve ser maior que zero."
     if sender.lower() == receiver.lower():
-        return False, "Não é possível transferir para você mesmo."
+        return False, "Não é possível transferir para o mesmo usuário."
 
     conn = get_db()
     try:
@@ -353,24 +390,29 @@ def transfer_b_plus(sender, receiver, amount):
                     return False, "Usuário destinatário não existe."
 
                 cursor.execute("SELECT balance FROM users WHERE username = %s", (sender,))
-                sender_bal = float(cursor.fetchone()["balance"])
-                
+                sender_res = cursor.fetchone()
+                if not sender_res:
+                    return False, "Usuário remetente não existe."
+
+                sender_bal = float(sender_res["balance"])
                 if sender_bal < amount:
-                    return False, f"Saldo insuficiente! Saldo atual: {sender_bal:.2f} B+."
+                    return False, f"Saldo insuficiente! Saldo atual de {sender}: {sender_bal:.2f} B+."
 
                 cursor.execute("UPDATE users SET balance = balance - %s WHERE username = %s", (amount, sender))
                 cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, receiver))
                 cursor.execute(
                     "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
-                    (sender, receiver, amount, "Transferência efetuada")
+                    (sender, receiver, amount, description)
                 )
-                return True, f"Sucesso! {amount:.2f} B+ enviadas para {receiver}."
+                return True, f"Sucesso! {amount:.2f} B+ transferidas de {sender} para {receiver}."
     except Exception as e:
         return False, f"Erro ao processar a transação: {str(e)}"
     finally:
         conn.close()
 
-def withdraw_b_plus(username, amount):
+def withdraw_b_plus(username, amount, description="Saque em espécie de B+"):
+    if not username:
+        return False, "Selecione um usuário válido."
     amount = float(amount)
     if amount <= 0:
         return False, "O valor do saque deve ser maior que zero."
@@ -386,14 +428,14 @@ def withdraw_b_plus(username, amount):
 
                 current_balance = float(res["balance"])
                 if current_balance < amount:
-                    return False, f"Saldo insuficiente! Saldo disponível: {current_balance:.2f} B+."
+                    return False, f"Saldo insuficiente! Saldo disponível de {username}: {current_balance:.2f} B+."
 
                 cursor.execute("UPDATE users SET balance = balance - %s WHERE username = %s", (amount, username))
                 cursor.execute(
                     "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
-                    (username, "CAIXA / SAQUE", amount, "Saque em espécie de B+")
+                    (username, "CAIXA / SAQUE", amount, description)
                 )
-                return True, f"Saque de {amount:.2f} B+ realizado com sucesso!"
+                return True, f"Saque de {amount:.2f} B+ realizado com sucesso da conta de {username}!"
     except Exception as e:
         return False, f"Erro ao processar o saque: {str(e)}"
     finally:
@@ -487,11 +529,20 @@ elif st.session_state["user_type"] == 2:
 
     st.title("🛡️ Administração B+ Bank")
     
-    tab_schools, tab_classes, tab_teachers, tab_students, tab_list_students, tab_list_schools = st.tabs([
+    (
+        tab_schools,
+        tab_classes,
+        tab_teachers,
+        tab_students,
+        tab_finance,
+        tab_list_students,
+        tab_list_schools,
+    ) = st.tabs([
         "🏫 Escolas", 
         "📚 Turmas", 
         "👨‍🏫 Cadastrar Professor",
-        "➕ Cadastrar Aluno", 
+        "➕ Cadastrar Aluno",
+        "💰 Operações Financeiras",
         "📋 Lista de Alunos",
         "🏢 Lista de Escolas"
     ])
@@ -582,6 +633,76 @@ elif st.session_state["user_type"] == 2:
                         st.success(f"✅ {msg}")
                     else:
                         st.error(f"❌ {msg}")
+
+    with tab_finance:
+        st.subheader("Operações Financeiras em Contas de Alunos")
+        all_student_names = get_all_student_usernames()
+
+        if not all_student_names:
+            st.info("Nenhum aluno cadastrado para realizar operações financeiras.")
+        else:
+            operacao = st.radio(
+                "Selecione a operação:",
+                ["💵 Depositar B+", "💸 Sacar B+", "🔄 Transferir B+"],
+                horizontal=True
+            )
+            st.divider()
+
+            if operacao == "💵 Depositar B+":
+                st.markdown("#### Depositar B+ na conta de um aluno")
+                target_student = st.selectbox("Selecione o Aluno", all_student_names, key="adm_dep_student")
+                dep_amount = st.number_input("Valor do Depósito (B+)", min_value=0.01, value=10.0, step=5.0, key="adm_dep_val")
+
+                if st.button("Confirmar Depósito", type="primary", key="btn_adm_dep"):
+                    success, msg = deposit_b_plus(target_student, dep_amount, st.session_state["user"])
+                    if success:
+                        st.success(f"✅ {msg}")
+                    else:
+                        st.error(f"❌ {msg}")
+
+                current_bal = float(get_balance(target_student))
+                st.caption(f"Saldo atual de **{target_student}**: **{current_bal:.2f} B+**")
+
+            elif operacao == "💸 Sacar B+":
+                st.markdown("#### Sacar B+ da conta de um aluno")
+                target_student = st.selectbox("Selecione o Aluno", all_student_names, key="adm_with_student")
+                with_amount = st.number_input("Valor do Saque (B+)", min_value=0.01, value=10.0, step=5.0, key="adm_with_val")
+
+                if st.button("Confirmar Saque", type="primary", key="btn_adm_with"):
+                    desc = f"Saque efetuado pelo admin ({st.session_state['user']})"
+                    success, msg = withdraw_b_plus(target_student, with_amount, description=desc)
+                    if success:
+                        st.success(f"✅ {msg}")
+                    else:
+                        st.error(f"❌ {msg}")
+
+                current_bal = float(get_balance(target_student))
+                st.caption(f"Saldo atual de **{target_student}**: **{current_bal:.2f} B+**")
+
+            elif operacao == "🔄 Transferir B+":
+                st.markdown("#### Transferir B+ entre alunos")
+                if len(all_student_names) < 2:
+                    st.warning("É necessário ter pelo menos 2 alunos cadastrados para realizar transferências.")
+                else:
+                    sender_student = st.selectbox("Aluno de Origem (Quem envia)", all_student_names, key="adm_transf_sender")
+                    receiver_options = [u for u in all_student_names if u != sender_student]
+                    receiver_student = st.selectbox("Aluno de Destino (Quem recebe)", receiver_options, key="adm_transf_receiver")
+                    transf_amount = st.number_input("Valor da Transferência (B+)", min_value=0.01, value=10.0, step=5.0, key="adm_transf_val")
+
+                    if st.button("Confirmar Transferência", type="primary", key="btn_adm_transf"):
+                        desc = f"Transferência efetuada pelo admin ({st.session_state['user']})"
+                        success, msg = transfer_b_plus(sender_student, receiver_student, transf_amount, description=desc)
+                        if success:
+                            st.success(f"✅ {msg}")
+                        else:
+                            st.error(f"❌ {msg}")
+
+                    sender_bal = float(get_balance(sender_student))
+                    receiver_bal = float(get_balance(receiver_student))
+                    st.caption(
+                        f"Saldo de **{sender_student}**: **{sender_bal:.2f} B+** | "
+                        f"Saldo de **{receiver_student}**: **{receiver_bal:.2f} B+**"
+                    )
 
     with tab_list_students:
         st.subheader("Lista de Todos os Alunos Cadastrados")
