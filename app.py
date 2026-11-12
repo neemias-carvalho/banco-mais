@@ -404,7 +404,7 @@ def transfer_b_plus(sender, receiver, amount, description="Transferência efetua
                     "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
                     (sender, receiver, amount, description)
                 )
-                return True, f"Sucesso! {amount:.2f} B+ transferidas de {sender} para {receiver}."
+                return True, f"Transferência de {amount:.2f} B+ realizada de {sender} para {receiver}."
     except Exception as e:
         return False, f"Erro ao processar a transação: {str(e)}"
     finally:
@@ -817,7 +817,7 @@ else:
             if st.button("Confirmar Envio", type="primary"):
                 success, msg = transfer_b_plus(current_user, destinatario, valor_transf)
                 if success:
-                    st.success(f"✅ {msg}")
+                    st.toast(f"✅ {msg}")
                     st.rerun()
                 else:
                     st.error(f"❌ {msg}")
@@ -829,7 +829,7 @@ else:
         if st.button("Confirmar Saque", type="primary"):
             success, msg = withdraw_b_plus(current_user, valor_saque)
             if success:
-                st.success(f"✅ {msg}")
+                st.toast(f"✅ {msg}")
                 st.rerun()
             else:
                 st.error(f"❌ {msg}")
