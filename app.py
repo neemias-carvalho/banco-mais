@@ -16,7 +16,7 @@ def get_db():
     try:
         db_url = st.secrets["postgres_url"]
     except Exception:
-        db_url = "postgresql://postgres.qubswavybduwpoumwfle:BLkJh8ACFA2N2g@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+        db_url = "postgresql://postgres:senha@localhost:5432/b_plus_bank"
         
     conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
@@ -101,6 +101,8 @@ def add_school(name):
                 return True, f"Escola '{name}' cadastrada com sucesso!"
     except psycopg2.IntegrityError:
         return False, "Esta escola já está cadastrada."
+    except Exception as e:
+        return False, f"Erro ao cadastrar escola: {str(e)}"
     finally:
         conn.close()
 
@@ -205,6 +207,8 @@ def register_teacher(username, password, confirm_password, school_id, class_id):
                 return True, f"Professor '{username}' cadastrado com sucesso!"
     except psycopg2.IntegrityError:
         return False, "Nome de usuário já está em uso."
+    except Exception as e:
+        return False, f"Erro ao cadastrar professor: {str(e)}"
     finally:
         conn.close()
 
@@ -238,6 +242,8 @@ def register_student(username, password, confirm_password, school_id, class_id):
                 return True, f"Aluno '{username}' cadastrado com sucesso!"
     except psycopg2.IntegrityError:
         return False, "Nome de usuário já está em uso."
+    except Exception as e:
+        return False, f"Erro ao cadastrar aluno: {str(e)}"
     finally:
         conn.close()
 
@@ -471,6 +477,8 @@ def change_password(username, old_pass, new_pass):
                 new_salt, new_hash = hash_password(new_pass)
                 cursor.execute("UPDATE users SET salt = %s, password_hash = %s WHERE username = %s", (new_salt, new_hash, username))
                 return True, "Senha alterada com sucesso!"
+    except Exception as e:
+        return False, f"Erro ao alterar senha: {str(e)}"
     finally:
         conn.close()
 
