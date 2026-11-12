@@ -799,6 +799,8 @@ else:
     balance = float(get_balance(current_user))
 
     st.sidebar.title("👋 Menu do Aluno")
+    st.sidebar.write(f"Escola: **{school_name}**")
+    st.sidebar.write(f"Série/Turma: **{class_name}**")
     st.sidebar.write(f"Usuário: **{current_user}**")
     if st.sidebar.button("Sair", type="secondary", use_container_width=True):
         logout()
