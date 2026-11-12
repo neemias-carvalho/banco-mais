@@ -796,12 +796,16 @@ elif st.session_state["user_type"] == 3:
 # --- PAINEL DO ALUNO (Tipo 1) ---
 else:
     current_user = st.session_state["user"]
+    student_school_id = st.session_state["school_id"]
+    student_class_id = st.session_state["class_id"]
+
+    school_name, class_name = get_school_and_class_names(student_school_id, student_class_id)
     balance = float(get_balance(current_user))
 
     st.sidebar.title("👋 Menu do Aluno")
+    st.sidebar.write(f"Usuário: **{current_user}**")
     st.sidebar.write(f"Escola: **{school_name}**")
     st.sidebar.write(f"Série/Turma: **{class_name}**")
-    st.sidebar.write(f"Usuário: **{current_user}**")
     if st.sidebar.button("Sair", type="secondary", use_container_width=True):
         logout()
 
