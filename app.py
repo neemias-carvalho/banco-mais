@@ -113,6 +113,32 @@ def get_schools():
     finally:
         conn.close()
 
+def get_all_schools_details():
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT s.id AS "ID", 
+                       s.name AS "Escola",
+                       COUNT(DISTINCT c.id) AS "Total de Turmas",
+                       COUNT(DISTINCT u.id) AS "Total de Alunos"
+                FROM schools s
+                LEFT JOIN classes c ON c.school_id = s.id
+                LEFT JOIN users u ON u.school_id = s.id AND u.user_type = 1
+                GROUP BY s.id, s.name
+                ORDER BY s.id ASC
+            ''')
+            rows = cursor.fetchall()
+            schools_list = []
+            for r in rows:
+                r_dict = dict(r)
+                r_dict["Total de Turmas"] = int(r_dict["Total de Turmas"])
+                r_dict["Total de Alunos"] = int(r_dict["Total de Alunos"])
+                schools_list.append(r_dict)
+            return schools_list
+    finally:
+        conn.close()
+
 def add_class(name, school_id):
     name = name.strip()
     if not name:
@@ -243,9 +269,9 @@ def get_all_students():
     try:
         with conn.cursor() as cursor:
             cursor.execute('''
-                SELECT u.id AS ID, u.username AS Aluno, 
-                       COALESCE(s.name, 'N/A') AS Escola, 
-                       COALESCE(c.name, 'N/A') AS Classe,
+                SELECT u.id AS "ID", u.username AS "Aluno", 
+                       COALESCE(s.name, 'N/A') AS "Escola", 
+                       COALESCE(c.name, 'N/A') AS "Classe",
                        u.balance AS "Saldo (B+)"
                 FROM users u 
                 LEFT JOIN schools s ON u.school_id = s.id 
@@ -268,9 +294,9 @@ def get_students_by_school(school_id):
     try:
         with conn.cursor() as cursor:
             cursor.execute('''
-                SELECT u.id AS ID, u.username AS Aluno, 
-                       COALESCE(s.name, 'N/A') AS Escola, 
-                       COALESCE(c.name, 'N/A') AS Classe,
+                SELECT u.id AS "ID", u.username AS "Aluno", 
+                       COALESCE(s.name, 'N/A') AS "Escola", 
+                       COALESCE(c.name, 'N/A') AS "Classe",
                        u.balance AS "Saldo (B+)"
                 FROM users u 
                 LEFT JOIN schools s ON u.school_id = s.id 
@@ -461,12 +487,13 @@ elif st.session_state["user_type"] == 2:
 
     st.title("🛡️ Administração B+ Bank")
     
-    tab_schools, tab_classes, tab_teachers, tab_students, tab_list = st.tabs([
+    tab_schools, tab_classes, tab_teachers, tab_students, tab_list_students, tab_list_schools = st.tabs([
         "🏫 Escolas", 
         "📚 Turmas", 
         "👨‍🏫 Cadastrar Professor",
         "➕ Cadastrar Aluno", 
-        "📋 Lista de Alunos"
+        "📋 Lista de Alunos",
+        "🏢 Lista de Escolas"
     ])
 
     with tab_schools:
@@ -556,14 +583,25 @@ elif st.session_state["user_type"] == 2:
                     else:
                         st.error(f"❌ {msg}")
 
-    with tab_list:
-        st.subheader("Lista de Alunos Cadastrados")
+    with tab_list_students:
+        st.subheader("Lista de Todos os Alunos Cadastrados")
         students = get_all_students()
         if not students:
             st.info("Nenhum aluno cadastrado no momento.")
         else:
-            df = pd.DataFrame(students)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.caption(f"Total de alunos cadastrados: **{len(students)}**")
+            df_students = pd.DataFrame(students)
+            st.dataframe(df_students, use_container_width=True, hide_index=True)
+
+    with tab_list_schools:
+        st.subheader("Lista de Todas as Escolas Cadastradas")
+        schools_details = get_all_schools_details()
+        if not schools_details:
+            st.info("Nenhuma escola cadastrada no momento.")
+        else:
+            st.caption(f"Total de escolas cadastradas: **{len(schools_details)}**")
+            df_schools = pd.DataFrame(schools_details)
+            st.dataframe(df_schools, use_container_width=True, hide_index=True)
 
 # --- PAINEL DO PROFESSOR (Tipo 3) ---
 elif st.session_state["user_type"] == 3:
