@@ -16,7 +16,7 @@ def get_db():
     try:
         db_url = st.secrets["postgres_url"]
     except Exception:
-        db_url = "postgresql://postgres.qubswavybduwpoumwfle:BLkJh8ACFA2N2g@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+        db_url = "postgresql://postgres:senha@localhost:5432/b_plus_bank"
         
     conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
@@ -73,13 +73,9 @@ def init_db():
                         receiver TEXT NOT NULL,
                         amount REAL NOT NULL,
                         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        description TEXT DEFAULT '',
-                        status TEXT DEFAULT 'APROVADA'
+                        description TEXT DEFAULT ''
                     )
                 ''')
-
-                # Garante compatibilidade com bancos já existentes
-                cursor.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'APROVADA'")
                 
                 # Admin Default (admin / b@nc0m@15)
                 cursor.execute("SELECT id FROM users WHERE username = %s", ("admin",))
@@ -240,7 +236,7 @@ def register_student(username, password, confirm_password, school_id, class_id):
                     (username, salt_hex, hash_hex, 100.0, school_id, class_id)
                 )
                 cursor.execute(
-                    "INSERT INTO transactions (sender, receiver, amount, description, status) VALUES (%s, %s, %s, %s, 'APROVADA')",
+                    "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
                     ("SISTEMA", username, 100.0, "Bônus de boas-vindas")
                 )
                 return True, f"Aluno '{username}' cadastrado com sucesso!"
@@ -352,19 +348,6 @@ def get_balance(username):
     finally:
         conn.close()
 
-def get_pending_balance(username):
-    conn = get_db()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE sender = %s AND status = 'PENDENTE'",
-                (username,)
-            )
-            res = cursor.fetchone()
-            return float(res["total"]) if res else 0.0
-    finally:
-        conn.close()
-
 def deposit_b_plus(username, amount, admin_user="ADMIN"):
     if not username:
         return False, "Selecione um aluno válido."
@@ -384,7 +367,7 @@ def deposit_b_plus(username, amount, admin_user="ADMIN"):
 
                 cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, username))
                 cursor.execute(
-                    "INSERT INTO transactions (sender, receiver, amount, description, status) VALUES (%s, %s, %s, %s, 'APROVADA')",
+                    "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
                     ("ADMIN / DEPÓSITO", username, amount, f"Depósito efetuado pelo admin ({admin_user})")
                 )
                 return True, f"Depósito de {amount:.2f} B+ realizado com sucesso para {username}!"
@@ -393,7 +376,7 @@ def deposit_b_plus(username, amount, admin_user="ADMIN"):
     finally:
         conn.close()
 
-def transfer_b_plus(sender, receiver, amount, description="Transferência efetuada", require_approval=True):
+def transfer_b_plus(sender, receiver, amount, description="Transferência efetuada"):
     if not receiver:
         return False, "Selecione um destinatário válido."
     receiver = receiver.strip()
@@ -421,28 +404,19 @@ def transfer_b_plus(sender, receiver, amount, description="Transferência efetua
                 if sender_bal < amount:
                     return False, f"Saldo insuficiente! Saldo atual de {sender}: {sender_bal:.2f} B+."
 
-                # Reserva/debita o valor do remetente imediatamente para evitar saldo duplo
                 cursor.execute("UPDATE users SET balance = balance - %s WHERE username = %s", (amount, sender))
-
-                if require_approval:
-                    cursor.execute(
-                        "INSERT INTO transactions (sender, receiver, amount, description, status) VALUES (%s, %s, %s, %s, 'PENDENTE')",
-                        (sender, receiver, amount, description)
-                    )
-                    return True, f"Solicitação de transferência de {amount:.2f} B+ para {receiver} enviada! Aguardando aprovação do administrador."
-                else:
-                    cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, receiver))
-                    cursor.execute(
-                        "INSERT INTO transactions (sender, receiver, amount, description, status) VALUES (%s, %s, %s, %s, 'APROVADA')",
-                        (sender, receiver, amount, description)
-                    )
-                    return True, f"Transferência de {amount:.2f} B+ realizada de {sender} para {receiver}."
+                cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, receiver))
+                cursor.execute(
+                    "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
+                    (sender, receiver, amount, description)
+                )
+                return True, f"Transferência de {amount:.2f} B+ realizada de {sender} para {receiver}."
     except Exception as e:
         return False, f"Erro ao processar a transação: {str(e)}"
     finally:
         conn.close()
 
-def withdraw_b_plus(username, amount, description="Saque em espécie de B+", require_approval=True):
+def withdraw_b_plus(username, amount, description="Saque em espécie de B+"):
     if not username:
         return False, "Selecione um usuário válido."
     amount = float(amount)
@@ -462,149 +436,14 @@ def withdraw_b_plus(username, amount, description="Saque em espécie de B+", req
                 if current_balance < amount:
                     return False, f"Saldo insuficiente! Saldo disponível de {username}: {current_balance:.2f} B+."
 
-                # Reserva/debita o valor da conta imediatamente para evitar saldo duplo
                 cursor.execute("UPDATE users SET balance = balance - %s WHERE username = %s", (amount, username))
-
-                if require_approval:
-                    cursor.execute(
-                        "INSERT INTO transactions (sender, receiver, amount, description, status) VALUES (%s, %s, %s, %s, 'PENDENTE')",
-                        (username, "CAIXA / SAQUE", amount, description)
-                    )
-                    return True, f"Solicitação de saque de {amount:.2f} B+ enviada! Aguardando aprovação do administrador."
-                else:
-                    cursor.execute(
-                        "INSERT INTO transactions (sender, receiver, amount, description, status) VALUES (%s, %s, %s, %s, 'APROVADA')",
-                        (username, "CAIXA / SAQUE", amount, description)
-                    )
-                    return True, f"Saque de {amount:.2f} B+ realizado com sucesso da conta de {username}!"
+                cursor.execute(
+                    "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
+                    (username, "CAIXA / SAQUE", amount, description)
+                )
+                return True, f"Saque de {amount:.2f} B+ realizado com sucesso da conta de {username}!"
     except Exception as e:
         return False, f"Erro ao processar o saque: {str(e)}"
-    finally:
-        conn.close()
-
-def get_pending_transactions():
-    conn = get_db()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute('''
-                SELECT t.id,
-                       t.sender,
-                       t.receiver,
-                       t.amount,
-                       t.timestamp,
-                       t.description,
-                       u.user_type,
-                       COALESCE(s.name, 'N/A') AS school_name,
-                       COALESCE(c.name, 'N/A') AS class_name
-                FROM transactions t
-                LEFT JOIN users u ON t.sender = u.username
-                LEFT JOIN schools s ON u.school_id = s.id
-                LEFT JOIN classes c ON u.class_id = c.id
-                WHERE t.status = 'PENDENTE'
-                ORDER BY t.id ASC
-            ''')
-            rows = cursor.fetchall()
-            result = []
-            for r in rows:
-                r_dict = dict(r)
-                r_dict["amount"] = float(r_dict["amount"])
-                result.append(r_dict)
-            return result
-    finally:
-        conn.close()
-
-def get_validated_transactions_history():
-    conn = get_db()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute('''
-                SELECT id AS "ID",
-                       sender AS "Solicitante",
-                       receiver AS "Destino",
-                       amount AS "Valor (B+)",
-                       status AS "Status",
-                       description AS "Descrição",
-                       timestamp AS "Data/Hora"
-                FROM transactions
-                WHERE status IN ('APROVADA', 'REPROVADA')
-                  AND sender NOT IN ('SISTEMA', 'ADMIN / DEPÓSITO')
-                ORDER BY id DESC
-                LIMIT 50
-            ''')
-            rows = cursor.fetchall()
-            result = []
-            for r in rows:
-                r_dict = dict(r)
-                r_dict["Valor (B+)"] = float(r_dict["Valor (B+)"])
-                r_dict["Data/Hora"] = str(r_dict["Data/Hora"])
-                result.append(r_dict)
-            return result
-    finally:
-        conn.close()
-
-def approve_transaction(tx_id, admin_user="ADMIN"):
-    conn = get_db()
-    try:
-        with conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT id, sender, receiver, amount, description, status FROM transactions WHERE id = %s FOR UPDATE",
-                    (tx_id,)
-                )
-                tx = cursor.fetchone()
-                if not tx:
-                    return False, "Operação não encontrada."
-                if tx["status"] != "PENDENTE":
-                    return False, f"Esta operação já foi processada ({tx['status']})."
-
-                amount = float(tx["amount"])
-                receiver = tx["receiver"]
-                desc = f"{tx['description']} (Aprovada por {admin_user})"
-
-                if receiver != "CAIXA / SAQUE":
-                    cursor.execute("SELECT balance FROM users WHERE username = %s", (receiver,))
-                    if not cursor.fetchone():
-                        return False, f"Destinatário '{receiver}' não encontrado."
-                    cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, receiver))
-
-                cursor.execute(
-                    "UPDATE transactions SET status = 'APROVADA', description = %s WHERE id = %s",
-                    (desc, tx_id)
-                )
-                return True, f"Operação #{tx_id} aprovada com sucesso!"
-    except Exception as e:
-        return False, f"Erro ao aprovar operação: {str(e)}"
-    finally:
-        conn.close()
-
-def reject_transaction(tx_id, admin_user="ADMIN"):
-    conn = get_db()
-    try:
-        with conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT id, sender, receiver, amount, description, status FROM transactions WHERE id = %s FOR UPDATE",
-                    (tx_id,)
-                )
-                tx = cursor.fetchone()
-                if not tx:
-                    return False, "Operação não encontrada."
-                if tx["status"] != "PENDENTE":
-                    return False, f"Esta operação já foi processada ({tx['status']})."
-
-                amount = float(tx["amount"])
-                sender = tx["sender"]
-                desc = f"{tx['description']} (Reprovada por {admin_user})"
-
-                # Devolve o valor reservado ao solicitante
-                cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, sender))
-                cursor.execute(
-                    "UPDATE transactions SET status = 'REPROVADA', description = %s WHERE id = %s",
-                    (desc, tx_id)
-                )
-                return True, f"Operação #{tx_id} reprovada e {amount:.2f} B+ estornados para {sender}."
-    except Exception as e:
-        return False, f"Erro ao reprovar operação: {str(e)}"
     finally:
         conn.close()
 
@@ -613,9 +452,9 @@ def get_history(username):
     try:
         with conn.cursor() as cursor:
             cursor.execute('''
-                SELECT sender, receiver, amount, timestamp, description, COALESCE(status, 'APROVADA') AS status
+                SELECT sender, receiver, amount, timestamp, description
                 FROM transactions
-                WHERE sender = %s OR (receiver = %s AND COALESCE(status, 'APROVADA') = 'APROVADA')
+                WHERE sender = %s OR receiver = %s
                 ORDER BY id DESC
             ''', (username, username))
             return cursor.fetchall()
@@ -704,7 +543,6 @@ elif st.session_state["user_type"] == 2:
         tab_teachers,
         tab_students,
         tab_finance,
-        tab_validation,
         tab_list_students,
         tab_list_schools,
     ) = st.tabs([
@@ -713,7 +551,6 @@ elif st.session_state["user_type"] == 2:
         "👨‍🏫 Cadastrar Professor",
         "➕ Cadastrar Aluno",
         "💰 Operações Financeiras",
-        "✅ Validação de Operações",
         "📋 Lista de Alunos",
         "🏢 Lista de Escolas"
     ])
@@ -841,7 +678,7 @@ elif st.session_state["user_type"] == 2:
 
                 if st.button("Confirmar Saque", type="primary", key="btn_adm_with"):
                     desc = f"Saque efetuado pelo admin ({st.session_state['user']})"
-                    success, msg = withdraw_b_plus(target_student, with_amount, description=desc, require_approval=False)
+                    success, msg = withdraw_b_plus(target_student, with_amount, description=desc)
                     if success:
                         st.success(f"✅ {msg}")
                     else:
@@ -862,7 +699,7 @@ elif st.session_state["user_type"] == 2:
 
                     if st.button("Confirmar Transferência", type="primary", key="btn_adm_transf"):
                         desc = f"Transferência efetuada pelo admin ({st.session_state['user']})"
-                        success, msg = transfer_b_plus(sender_student, receiver_student, transf_amount, description=desc, require_approval=False)
+                        success, msg = transfer_b_plus(sender_student, receiver_student, transf_amount, description=desc)
                         if success:
                             st.success(f"✅ {msg}")
                         else:
@@ -874,56 +711,6 @@ elif st.session_state["user_type"] == 2:
                         f"Saldo de **{sender_student}**: **{sender_bal:.2f} B+** | "
                         f"Saldo de **{receiver_student}**: **{receiver_bal:.2f} B+**"
                     )
-
-    with tab_validation:
-        st.subheader("Validação de Operações Pendentes")
-        pending_ops = get_pending_transactions()
-
-        if not pending_ops:
-            st.info("Nenhuma operação de saque ou transferência aguardando aprovação no momento.")
-        else:
-            st.caption(f"Total de operações pendentes: **{len(pending_ops)}**")
-            for op in pending_ops:
-                is_withdraw = op["receiver"] == "CAIXA / SAQUE"
-                op_type_label = "💵 Saque" if is_withdraw else "💸 Transferência"
-                role_label = "Professor" if op.get("user_type") == 3 else "Aluno"
-
-                with st.container(border=True):
-                    col_info, col_actions = st.columns([3, 1])
-                    with col_info:
-                        st.markdown(f"**#{op['id']} — {op_type_label} | Valor: `{op['amount']:.2f} B+`**")
-                        st.write(
-                            f"**Solicitante ({role_label}):** {op['sender']} "
-                            f"({op['school_name']} — {op['class_name']})"
-                        )
-                        if not is_withdraw:
-                            st.write(f"**Destinatário:** {op['receiver']}")
-                        st.caption(f"Data/Hora: {op['timestamp']} | Descrição: {op['description']}")
-
-                    with col_actions:
-                        if st.button("✅ Aprovar", key=f"approve_op_{op['id']}", type="primary", use_container_width=True):
-                            ok, msg = approve_transaction(op["id"], st.session_state["user"])
-                            if ok:
-                                st.toast(f"✅ {msg}")
-                                st.rerun()
-                            else:
-                                st.error(f"❌ {msg}")
-
-                        if st.button("❌ Reprovar", key=f"reject_op_{op['id']}", type="secondary", use_container_width=True):
-                            ok, msg = reject_transaction(op["id"], st.session_state["user"])
-                            if ok:
-                                st.toast(f"⚠️ {msg}")
-                                st.rerun()
-                            else:
-                                st.error(f"❌ {msg}")
-
-        with st.expander("📜 Histórico Recente de Validações"):
-            validated_hist = get_validated_transactions_history()
-            if not validated_hist:
-                st.info("Nenhuma operação validada registrada ainda.")
-            else:
-                df_val = pd.DataFrame(validated_hist)
-                st.dataframe(df_val, use_container_width=True, hide_index=True)
 
     with tab_list_students:
         st.subheader("Lista de Todos os Alunos Cadastrados")
@@ -1009,24 +796,15 @@ elif st.session_state["user_type"] == 3:
 # --- PAINEL DO ALUNO (Tipo 1) ---
 else:
     current_user = st.session_state["user"]
-    student_school_id = st.session_state["school_id"]
-    student_class_id = st.session_state["class_id"]
-
-    school_name, class_name = get_school_and_class_names(student_school_id, student_class_id)
     balance = float(get_balance(current_user))
-    pending_balance = float(get_pending_balance(current_user))
 
     st.sidebar.title("👋 Menu do Aluno")
     st.sidebar.write(f"Usuário: **{current_user}**")
-    st.sidebar.write(f"Escola: **{school_name}**")
-    st.sidebar.write(f"Série/Turma: **{class_name}**")
     if st.sidebar.button("Sair", type="secondary", use_container_width=True):
         logout()
 
     st.title("🪙 B+ Bank")
-    st.metric(label="Seu Saldo Disponível", value=f"{balance:.2f} B+")
-    if pending_balance > 0:
-        st.caption(f"⏳ Valor em análise aguardando aprovação do administrador: **{pending_balance:.2f} B+**")
+    st.metric(label="Seu Saldo Atual", value=f"{balance:.2f} B+")
 
     tab_transfer, tab_withdraw, tab_history, tab_settings = st.tabs([
         "💸 Transferir", 
@@ -1037,7 +815,6 @@ else:
 
     with tab_transfer:
         st.subheader("Transferência de B+")
-        st.info("ℹ️ Toda solicitação de transferência passa pela aprovação do administrador antes de ser creditada ao destinatário.")
         other_users = get_other_users(current_user)
         if not other_users:
             st.info("Não há outros alunos cadastrados para receber transferências.")
@@ -1045,23 +822,22 @@ else:
             destinatario = st.selectbox("Selecione o Destinatário", other_users)
             valor_transf = st.number_input("Valor (B+)", min_value=1.0, value=10.0, step=5.0)
             
-            if st.button("Solicitar Envio", type="primary"):
-                success, msg = transfer_b_plus(current_user, destinatario, valor_transf, require_approval=True)
+            if st.button("Confirmar Envio", type="primary"):
+                success, msg = transfer_b_plus(current_user, destinatario, valor_transf)
                 if success:
-                    st.toast(f"⏳ {msg}")
+                    st.toast(f"✅ {msg}")
                     st.rerun()
                 else:
                     st.error(f"❌ {msg}")
 
     with tab_withdraw:
         st.subheader("Sacar B+")
-        st.info("ℹ️ Toda solicitação de saque precisa ser aprovada pelo administrador.")
         valor_saque = st.number_input("Valor do Saque (B+)", min_value=1.0, max_value=max(1.0, balance), value=10.0, step=5.0)
         
-        if st.button("Solicitar Saque", type="primary"):
-            success, msg = withdraw_b_plus(current_user, valor_saque, require_approval=True)
+        if st.button("Confirmar Saque", type="primary"):
+            success, msg = withdraw_b_plus(current_user, valor_saque)
             if success:
-                st.toast(f"⏳ {msg}")
+                st.toast(f"✅ {msg}")
                 st.rerun()
             else:
                 st.error(f"❌ {msg}")
@@ -1072,11 +848,6 @@ else:
         if not history:
             st.info("Nenhuma movimentação realizada ainda.")
         else:
-            status_map = {
-                "PENDENTE": "⏳ PENDENTE",
-                "APROVADA": "✅ APROVADA",
-                "REPROVADA": "❌ REPROVADA",
-            }
             records = []
             for row in history:
                 sender = row["sender"]
@@ -1084,7 +855,6 @@ else:
                 amt = float(row["amount"])
                 timestamp = row["timestamp"]
                 desc = row["description"]
-                status_raw = row["status"]
 
                 if sender == current_user:
                     tipo = "ENVIO ⬆️"
@@ -1100,7 +870,6 @@ else:
                     "Origem/Destino": outro,
                     "Descrição": desc,
                     "Valor": val_str,
-                    "Status": status_map.get(status_raw, status_raw),
                     "Data/Hora": str(timestamp)
                 })
             
