@@ -1,6 +1,7 @@
 import psycopg2
 import psycopg2.extras
 import hashlib
+import secrets
 import os
 import datetime
 import pandas as pd
@@ -16,7 +17,7 @@ def get_db():
     try:
         db_url = st.secrets["postgres_url"]
     except Exception:
-        db_url = "postgresql://postgres.qubswavybduwpoumwfle:BLkJh8ACFA2N2g@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+        db_url = "postgresql://postgres:senha@localhost:5432/b_plus_bank"
         
     conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
@@ -94,6 +95,15 @@ def init_db():
                         review_note TEXT DEFAULT ''
                     )
                 ''')
+
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS user_sessions (
+                        token TEXT PRIMARY KEY,
+                        username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP NOT NULL
+                    )
+                ''')
                 
                 # Admin Default (admin / b@nc0m@15)
                 cursor.execute("SELECT id FROM users WHERE username = %s", ("admin",))
@@ -103,6 +113,59 @@ def init_db():
                         "INSERT INTO users (username, salt, password_hash, balance, user_type) VALUES (%s, %s, %s, %s, %s)",
                         ("admin", salt_hex, hash_hex, 0.0, 2)
                     )
+    finally:
+        conn.close()
+
+# --- Gerenciamento de Sessão Persistente (Banco de Dados) ---
+def create_session_token(username):
+    token = secrets.token_urlsafe(32)
+    conn = get_db()
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM user_sessions WHERE expires_at < CURRENT_TIMESTAMP")
+                cursor.execute(
+                    """INSERT INTO user_sessions (token, username, expires_at) 
+                       VALUES (%s, %s, CURRENT_TIMESTAMP + INTERVAL '24 hours')""",
+                    (token, username)
+                )
+        return token
+    finally:
+        conn.close()
+
+def validate_session_token(token):
+    if not token:
+        return None
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT u.username, u.balance, u.user_type, u.school_id, u.class_id
+                FROM user_sessions s
+                JOIN users u ON s.username = u.username
+                WHERE s.token = %s AND s.expires_at > CURRENT_TIMESTAMP
+            ''', (token,))
+            user = cursor.fetchone()
+            if user:
+                return {
+                    "username": user["username"],
+                    "balance": float(user["balance"]),
+                    "user_type": user["user_type"],
+                    "school_id": user["school_id"],
+                    "class_id": user["class_id"]
+                }
+        return None
+    finally:
+        conn.close()
+
+def delete_session_token(token):
+    if not token:
+        return
+    conn = get_db()
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM user_sessions WHERE token = %s", (token,))
     finally:
         conn.close()
 
@@ -810,12 +873,33 @@ if "school_id" not in st.session_state:
     st.session_state["school_id"] = None
 if "class_id" not in st.session_state:
     st.session_state["class_id"] = None
+if "session_token" not in st.session_state:
+    st.session_state["session_token"] = None
+
+# Restaura sessão automaticamente caso o usuário atualize (F5) a página
+if st.session_state["user"] is None:
+    url_token = st.query_params.get("token")
+    if url_token:
+        restored_user = validate_session_token(url_token)
+        if restored_user:
+            st.session_state["user"] = restored_user["username"]
+            st.session_state["user_type"] = restored_user["user_type"]
+            st.session_state["school_id"] = restored_user["school_id"]
+            st.session_state["class_id"] = restored_user["class_id"]
+            st.session_state["session_token"] = url_token
+        else:
+            st.query_params.clear()
 
 def logout():
+    token = st.session_state.get("session_token") or st.query_params.get("token")
+    if token:
+        delete_session_token(token)
+    st.query_params.clear()
     st.session_state["user"] = None
     st.session_state["user_type"] = 1
     st.session_state["school_id"] = None
     st.session_state["class_id"] = None
+    st.session_state["session_token"] = None
     st.rerun()
 
 # ==========================================
@@ -834,10 +918,13 @@ if st.session_state["user"] is None:
         if submit:
             success, res = login_user(user_input, pass_input)
             if success:
+                token = create_session_token(res["username"])
                 st.session_state["user"] = res["username"]
                 st.session_state["user_type"] = res["user_type"]
                 st.session_state["school_id"] = res["school_id"]
                 st.session_state["class_id"] = res["class_id"]
+                st.session_state["session_token"] = token
+                st.query_params["token"] = token
                 st.rerun()
             else:
                 st.error(f"❌ {res}")
