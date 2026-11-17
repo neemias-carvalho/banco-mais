@@ -467,7 +467,9 @@ def get_pending_outgoing_amount(username):
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT COALESCE(SUM(amount), 0) AS total FROM pending_operations WHERE sender_username = %s AND status = 'PENDENTE'",
+                """SELECT COALESCE(SUM(amount), 0) AS total 
+                   FROM pending_operations 
+                   WHERE sender_username = %s AND status = 'PENDENTE' AND op_type IN ('SAQUE', 'TRANSFERENCIA')""",
                 (username,)
             )
             res = cursor.fetchone()
@@ -476,13 +478,45 @@ def get_pending_outgoing_amount(username):
         conn.close()
 
 # --- Solicitações de Operações (Alunos e Professores -> Aguardam Admin) ---
+def request_deposit(requester_username, requester_role, target_username, amount, reason=""):
+    if not target_username:
+        return False, "Selecione um aluno válido."
+    target_username = target_username.strip()
+    amount = float(amount)
+    if amount <= 0:
+        return False, f"O valor do depósito para {target_username} deve ser maior que zero."
+
+    reason_clean = reason.strip() if reason else ""
+    base_desc = f"Depósito solicitado por {requester_role.lower()} ({requester_username})"
+    full_desc = f"{base_desc} | Motivo: {reason_clean}" if reason_clean else base_desc
+
+    conn = get_db()
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT id FROM users WHERE username = %s AND user_type = 1", (target_username,))
+                if not cursor.fetchone():
+                    return False, f"Aluno '{target_username}' não encontrado."
+
+                cursor.execute(
+                    """INSERT INTO pending_operations 
+                       (op_type, requester_username, requester_role, sender_username, receiver_username, amount, description, status) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'PENDENTE')""",
+                    ("DEPOSITO", requester_username, requester_role, "ADMIN / DEPÓSITO", target_username, amount, full_desc)
+                )
+                return True, f"Solicitação de depósito de {amount:.2f} B+ para {target_username} enviada!"
+    except Exception as e:
+        return False, f"Erro ao registrar solicitação de depósito para {target_username}: {str(e)}"
+    finally:
+        conn.close()
+
 def request_withdraw(requester_username, requester_role, target_username, amount, description="Saque em espécie de B+"):
     if not target_username:
         return False, "Selecione um usuário válido."
     target_username = target_username.strip()
     amount = float(amount)
     if amount <= 0:
-        return False, "O valor do saque deve ser maior que zero."
+        return False, f"O valor do saque para {target_username} deve ser maior que zero."
 
     conn = get_db()
     try:
@@ -491,11 +525,13 @@ def request_withdraw(requester_username, requester_role, target_username, amount
                 cursor.execute("SELECT balance FROM users WHERE username = %s AND user_type = 1", (target_username,))
                 res = cursor.fetchone()
                 if not res:
-                    return False, "Aluno não encontrado."
+                    return False, f"Aluno '{target_username}' não encontrado."
 
                 current_balance = float(res["balance"])
                 cursor.execute(
-                    "SELECT COALESCE(SUM(amount), 0) AS total FROM pending_operations WHERE sender_username = %s AND status = 'PENDENTE'",
+                    """SELECT COALESCE(SUM(amount), 0) AS total 
+                       FROM pending_operations 
+                       WHERE sender_username = %s AND status = 'PENDENTE' AND op_type IN ('SAQUE', 'TRANSFERENCIA')""",
                     (target_username,)
                 )
                 pending_sum = float(cursor.fetchone()["total"])
@@ -503,8 +539,8 @@ def request_withdraw(requester_username, requester_role, target_username, amount
 
                 if available_balance < amount:
                     return False, (
-                        f"Saldo disponível insuficiente para solicitar saque! "
-                        f"Saldo atual: {current_balance:.2f} B+ | Pendente de aprovação: {pending_sum:.2f} B+ | "
+                        f"Saldo disponível insuficiente para {target_username}! "
+                        f"Saldo atual: {current_balance:.2f} B+ | Pendente: {pending_sum:.2f} B+ | "
                         f"Disponível: {available_balance:.2f} B+."
                     )
 
@@ -551,7 +587,9 @@ def request_transfer(requester_username, requester_role, sender, receiver, amoun
 
                 sender_bal = float(sender_res["balance"])
                 cursor.execute(
-                    "SELECT COALESCE(SUM(amount), 0) AS total FROM pending_operations WHERE sender_username = %s AND status = 'PENDENTE'",
+                    """SELECT COALESCE(SUM(amount), 0) AS total 
+                       FROM pending_operations 
+                       WHERE sender_username = %s AND status = 'PENDENTE' AND op_type IN ('SAQUE', 'TRANSFERENCIA')""",
                     (sender,)
                 )
                 pending_sum = float(cursor.fetchone()["total"])
@@ -586,13 +624,15 @@ def get_pending_operations():
                        po.description, po.status, po.created_at,
                        COALESCE(s_sender.name, 'N/A') AS sender_school,
                        COALESCE(c_sender.name, 'N/A') AS sender_class,
-                       COALESCE(s_rec.name, 'N/A') AS receiver_school
+                       COALESCE(s_rec.name, 'N/A') AS receiver_school,
+                       COALESCE(c_rec.name, 'N/A') AS receiver_class
                 FROM pending_operations po
                 LEFT JOIN users u_sender ON po.sender_username = u_sender.username
                 LEFT JOIN schools s_sender ON u_sender.school_id = s_sender.id
                 LEFT JOIN classes c_sender ON u_sender.class_id = c_sender.id
                 LEFT JOIN users u_rec ON po.receiver_username = u_rec.username
                 LEFT JOIN schools s_rec ON u_rec.school_id = s_rec.id
+                LEFT JOIN classes c_rec ON u_rec.class_id = c_rec.id
                 WHERE po.status = 'PENDENTE'
                 ORDER BY po.id ASC
             ''')
@@ -659,22 +699,43 @@ def approve_operation(op_id, admin_username, review_note=""):
                 note_suffix = f" | Obs: {review_note.strip()}" if review_note and review_note.strip() else ""
                 final_desc = f"{base_desc} (Aprovado por {admin_username}{note_suffix})"
 
-                cursor.execute("SELECT balance FROM users WHERE username = %s FOR UPDATE", (sender,))
-                sender_row = cursor.fetchone()
-                if not sender_row:
-                    return False, f"Aluno de origem '{sender}' não encontrado."
+                if op_type == "DEPOSITO":
+                    cursor.execute("SELECT balance FROM users WHERE username = %s AND user_type = 1 FOR UPDATE", (receiver,))
+                    if not cursor.fetchone():
+                        return False, f"Aluno destinatário '{receiver}' não encontrado."
 
-                sender_bal = float(sender_row["balance"])
-                if sender_bal < amount:
-                    return False, f"Saldo insuficiente na conta de {sender} ({sender_bal:.2f} B+) para aprovar {amount:.2f} B+."
+                    cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, receiver))
+                    cursor.execute(
+                        "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
+                        ("ADMIN / DEPÓSITO", receiver, amount, final_desc)
+                    )
 
-                if op_type == "SAQUE":
+                elif op_type == "SAQUE":
+                    cursor.execute("SELECT balance FROM users WHERE username = %s FOR UPDATE", (sender,))
+                    sender_row = cursor.fetchone()
+                    if not sender_row:
+                        return False, f"Aluno de origem '{sender}' não encontrado."
+
+                    sender_bal = float(sender_row["balance"])
+                    if sender_bal < amount:
+                        return False, f"Saldo insuficiente na conta de {sender} ({sender_bal:.2f} B+) para aprovar {amount:.2f} B+."
+
                     cursor.execute("UPDATE users SET balance = balance - %s WHERE username = %s", (amount, sender))
                     cursor.execute(
                         "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
                         (sender, "CAIXA / SAQUE", amount, final_desc)
                     )
+
                 elif op_type == "TRANSFERENCIA":
+                    cursor.execute("SELECT balance FROM users WHERE username = %s FOR UPDATE", (sender,))
+                    sender_row = cursor.fetchone()
+                    if not sender_row:
+                        return False, f"Aluno de origem '{sender}' não encontrado."
+
+                    sender_bal = float(sender_row["balance"])
+                    if sender_bal < amount:
+                        return False, f"Saldo insuficiente na conta de {sender} ({sender_bal:.2f} B+) para aprovar {amount:.2f} B+."
+
                     cursor.execute("SELECT balance FROM users WHERE username = %s FOR UPDATE", (receiver,))
                     if not cursor.fetchone():
                         return False, f"Aluno destinatário '{receiver}' não encontrado."
@@ -725,13 +786,17 @@ def reject_operation(op_id, admin_username, review_note=""):
         conn.close()
 
 # --- Operações Diretas (Exclusivas do Administrador) ---
-def deposit_b_plus(username, amount, admin_user="ADMIN"):
+def deposit_b_plus(username, amount, admin_user="ADMIN", reason=""):
     if not username:
         return False, "Selecione um aluno válido."
     username = username.strip()
     amount = float(amount)
     if amount <= 0:
-        return False, "O valor do depósito deve ser maior que zero."
+        return False, f"O valor do depósito para {username} deve ser maior que zero."
+
+    reason_clean = reason.strip() if reason else ""
+    base_desc = f"Depósito efetuado pelo admin ({admin_user})"
+    final_desc = f"{base_desc} | Motivo: {reason_clean}" if reason_clean else base_desc
 
     conn = get_db()
     try:
@@ -740,16 +805,16 @@ def deposit_b_plus(username, amount, admin_user="ADMIN"):
                 cursor.execute("SELECT balance FROM users WHERE username = %s AND user_type = 1", (username,))
                 res = cursor.fetchone()
                 if not res:
-                    return False, "Aluno não encontrado."
+                    return False, f"Aluno '{username}' não encontrado."
 
                 cursor.execute("UPDATE users SET balance = balance + %s WHERE username = %s", (amount, username))
                 cursor.execute(
                     "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
-                    ("ADMIN / DEPÓSITO", username, amount, f"Depósito efetuado pelo admin ({admin_user})")
+                    ("ADMIN / DEPÓSITO", username, amount, final_desc)
                 )
                 return True, f"Depósito de {amount:.2f} B+ realizado com sucesso para {username}!"
     except Exception as e:
-        return False, f"Erro ao processar o depósito: {str(e)}"
+        return False, f"Erro ao processar o depósito para {username}: {str(e)}"
     finally:
         conn.close()
 
@@ -798,7 +863,7 @@ def withdraw_b_plus(username, amount, description="Saque em espécie de B+"):
         return False, "Selecione um usuário válido."
     amount = float(amount)
     if amount <= 0:
-        return False, "O valor do saque deve ser maior que zero."
+        return False, f"O valor do saque para {username} deve ser maior que zero."
 
     conn = get_db()
     try:
@@ -807,7 +872,7 @@ def withdraw_b_plus(username, amount, description="Saque em espécie de B+"):
                 cursor.execute("SELECT balance FROM users WHERE username = %s", (username,))
                 res = cursor.fetchone()
                 if not res:
-                    return False, "Usuário não encontrado."
+                    return False, f"Usuário '{username}' não encontrado."
 
                 current_balance = float(res["balance"])
                 if current_balance < amount:
@@ -820,7 +885,7 @@ def withdraw_b_plus(username, amount, description="Saque em espécie de B+"):
                 )
                 return True, f"Saque de {amount:.2f} B+ realizado com sucesso da conta de {username}!"
     except Exception as e:
-        return False, f"Erro ao processar o saque: {str(e)}"
+        return False, f"Erro ao processar o saque de {username}: {str(e)}"
     finally:
         conn.close()
 
@@ -1061,37 +1126,93 @@ elif st.session_state["user_type"] == 2:
             st.divider()
 
             if operacao == "💵 Depositar B+":
-                st.markdown("#### Depositar B+ na conta de um aluno")
-                target_student = st.selectbox("Selecione o Aluno", all_student_names, key="adm_dep_student")
-                target_school = student_school_map.get(target_student, "N/A")
-                current_bal = float(get_balance(target_student))
-                st.info(f"🏫 **Escola:** {target_school} | 💰 **Saldo atual:** {current_bal:.2f} B+")
+                st.markdown("#### Depositar B+ para múltiplos alunos")
+                selected_students = st.multiselect(
+                    "Selecione os Alunos",
+                    all_student_names,
+                    placeholder="Escolha um ou mais alunos...",
+                    key="adm_dep_students"
+                )
 
-                dep_amount = st.number_input("Valor do Depósito (B+)", min_value=0.01, value=10.0, step=5.0, key="adm_dep_val")
+                if not selected_students:
+                    st.info("Selecione pelo menos um aluno acima para definir valores e motivos.")
+                else:
+                    dep_entries = {}
+                    for std in selected_students:
+                        std_school = student_school_map.get(std, "N/A")
+                        curr_bal = float(get_balance(std))
+                        with st.container(border=True):
+                            st.markdown(f"👤 **{std}** — 🏫 Escola: **{std_school}** | 💰 Saldo atual: **{curr_bal:.2f} B+**")
+                            col_val, col_reason = st.columns([1, 2])
+                            with col_val:
+                                val = st.number_input(
+                                    "Valor (B+)",
+                                    min_value=0.01,
+                                    value=10.0,
+                                    step=5.0,
+                                    key=f"adm_dep_val_{std}"
+                                )
+                            with col_reason:
+                                reason = st.text_input(
+                                    "Motivo do depósito",
+                                    placeholder="Ex: Participação em atividade",
+                                    key=f"adm_dep_reason_{std}"
+                                )
+                            dep_entries[std] = (val, reason)
 
-                if st.button("Confirmar Depósito", type="primary", key="btn_adm_dep"):
-                    success, msg = deposit_b_plus(target_student, dep_amount, st.session_state["user"])
-                    if success:
-                        st.success(f"✅ {msg}")
-                    else:
-                        st.error(f"❌ {msg}")
+                    if st.button("Confirmar Depósitos", type="primary", key="btn_adm_dep"):
+                        for std, (val, reason) in dep_entries.items():
+                            success, msg = deposit_b_plus(std, val, st.session_state["user"], reason=reason)
+                            if success:
+                                st.success(f"✅ {msg}")
+                            else:
+                                st.error(f"❌ {msg}")
 
             elif operacao == "💸 Sacar B+":
-                st.markdown("#### Sacar B+ da conta de um aluno")
-                target_student = st.selectbox("Selecione o Aluno", all_student_names, key="adm_with_student")
-                target_school = student_school_map.get(target_student, "N/A")
-                current_bal = float(get_balance(target_student))
-                st.info(f"🏫 **Escola:** {target_school} | 💰 **Saldo atual:** {current_bal:.2f} B+")
+                st.markdown("#### Sacar B+ de múltiplos alunos")
+                selected_students = st.multiselect(
+                    "Selecione os Alunos",
+                    all_student_names,
+                    placeholder="Escolha um ou mais alunos...",
+                    key="adm_with_students"
+                )
 
-                with_amount = st.number_input("Valor do Saque (B+)", min_value=0.01, value=10.0, step=5.0, key="adm_with_val")
+                if not selected_students:
+                    st.info("Selecione pelo menos um aluno acima para definir valores e motivos.")
+                else:
+                    with_entries = {}
+                    for std in selected_students:
+                        std_school = student_school_map.get(std, "N/A")
+                        curr_bal = float(get_balance(std))
+                        with st.container(border=True):
+                            st.markdown(f"👤 **{std}** — 🏫 Escola: **{std_school}** | 💰 Saldo atual: **{curr_bal:.2f} B+**")
+                            col_val, col_reason = st.columns([1, 2])
+                            with col_val:
+                                val = st.number_input(
+                                    "Valor do Saque (B+)",
+                                    min_value=0.01,
+                                    value=10.0,
+                                    step=5.0,
+                                    key=f"adm_with_val_{std}"
+                                )
+                            with col_reason:
+                                reason = st.text_input(
+                                    "Motivo do saque",
+                                    placeholder="Ex: Resgate na lojinha",
+                                    key=f"adm_with_reason_{std}"
+                                )
+                            with_entries[std] = (val, reason)
 
-                if st.button("Confirmar Saque", type="primary", key="btn_adm_with"):
-                    desc = f"Saque efetuado pelo admin ({st.session_state['user']})"
-                    success, msg = withdraw_b_plus(target_student, with_amount, description=desc)
-                    if success:
-                        st.success(f"✅ {msg}")
-                    else:
-                        st.error(f"❌ {msg}")
+                    if st.button("Confirmar Saques", type="primary", key="btn_adm_with"):
+                        for std, (val, reason) in with_entries.items():
+                            reason_clean = reason.strip() if reason else ""
+                            base_desc = f"Saque efetuado pelo admin ({st.session_state['user']})"
+                            full_desc = f"{base_desc} | Motivo: {reason_clean}" if reason_clean else base_desc
+                            success, msg = withdraw_b_plus(std, val, description=full_desc)
+                            if success:
+                                st.success(f"✅ {msg}")
+                            else:
+                                st.error(f"❌ {msg}")
 
             elif operacao == "🔄 Transferir B+":
                 st.markdown("#### Transferir B+ entre alunos")
@@ -1120,7 +1241,7 @@ elif st.session_state["user_type"] == 2:
                             st.error(f"❌ {msg}")
 
     with tab_validation:
-        st.subheader("Validação de Saques e Transferências")
+        st.subheader("Validação de Depósitos, Saques e Transferências")
         pending_ops = get_pending_operations()
 
         if not pending_ops:
@@ -1129,19 +1250,27 @@ elif st.session_state["user_type"] == 2:
             st.caption(f"Total de solicitações aguardando validação: **{len(pending_ops)}**")
             for op in pending_ops:
                 op_id = op["id"]
-                op_label = "💸 Saque" if op["op_type"] == "SAQUE" else "🔄 Transferência"
+                if op["op_type"] == "DEPOSITO":
+                    op_label = "💵 Depósito"
+                elif op["op_type"] == "SAQUE":
+                    op_label = "💸 Saque"
+                else:
+                    op_label = "🔄 Transferência"
+
                 amt = float(op["amount"])
                 with st.container(border=True):
                     col_info, col_actions = st.columns([3, 2])
                     with col_info:
                         st.markdown(f"**#{op_id} — {op_label} de {amt:.2f} B+**")
                         st.write(f"**Solicitante:** {op['requester_username']} ({op['requester_role']})")
-                        if op["op_type"] == "SAQUE":
+                        if op["op_type"] == "DEPOSITO":
+                            st.write(f"**Conta Beneficiada:** {op['receiver_username']} | **Escola:** {op['receiver_school']} ({op['receiver_class']})")
+                        elif op["op_type"] == "SAQUE":
                             st.write(f"**Conta do Aluno:** {op['sender_username']} | **Escola:** {op['sender_school']} ({op['sender_class']})")
                         else:
                             st.write(f"**De:** {op['sender_username']} ({op['sender_school']}) ➡️ **Para:** {op['receiver_username']} ({op['receiver_school']})")
                         if op["description"]:
-                            st.caption(f"Descrição: {op['description']}")
+                            st.caption(f"Descrição / Motivo: {op['description']}")
                         st.caption(f"Solicitado em: {op['created_at']}")
 
                     with col_actions:
@@ -1189,18 +1318,28 @@ elif st.session_state["user_type"] == 2:
                     continue
 
                 status_badge = "✅ APROVADA" if r["status"] == "APROVADA" else "❌ REPROVADA"
-                tipo_str = "Saque" if r["op_type"] == "SAQUE" else "Transferência"
-                destino_str = "CAIXA / SAQUE" if r["op_type"] == "SAQUE" else f"{r['receiver_username']} ({r['receiver_school']})"
+                if r["op_type"] == "DEPOSITO":
+                    tipo_str = "Depósito"
+                    origem_str = "ADMIN / DEPÓSITO"
+                    destino_str = f"{r['receiver_username']} ({r['receiver_school']})"
+                elif r["op_type"] == "SAQUE":
+                    tipo_str = "Saque"
+                    origem_str = f"{r['sender_username']} ({r['sender_school']})"
+                    destino_str = "CAIXA / SAQUE"
+                else:
+                    tipo_str = "Transferência"
+                    origem_str = f"{r['sender_username']} ({r['sender_school']})"
+                    destino_str = f"{r['receiver_username']} ({r['receiver_school']})"
 
                 hist_records.append({
                     "ID": r["id"],
                     "Status": status_badge,
                     "Tipo": tipo_str,
                     "Solicitante": f"{r['requester_username']} ({r['requester_role']})",
-                    "Origem (Aluno)": f"{r['sender_username']} ({r['sender_school']})",
+                    "Origem": origem_str,
                     "Destino": destino_str,
                     "Valor (B+)": f"{float(r['amount']):.2f}",
-                    "Descrição": r["description"] or "-",
+                    "Descrição / Motivo": r["description"] or "-",
                     "Obs. Admin": r["review_note"] or "-",
                     "Avaliado Por": r["reviewed_by"] or "-",
                     "Data Solicitação": str(r["created_at"]),
@@ -1276,7 +1415,7 @@ elif st.session_state["user_type"] == 3:
 
     with tab_finance:
         st.subheader(f"Operações Financeiras — Turma {class_name}")
-        st.caption("ℹ️ Saques e transferências solicitados pelo professor passam pela aprovação do administrador antes de serem efetivados.")
+        st.caption("ℹ️ Depósitos, saques e transferências solicitados pelo professor passam pela aprovação do administrador antes de serem efetivados.")
         class_student_names = get_student_usernames_by_class(teacher_class_id)
 
         if not class_student_names:
@@ -1284,28 +1423,102 @@ elif st.session_state["user_type"] == 3:
         else:
             operacao = st.radio(
                 "Selecione a operação:",
-                ["💸 Sacar B+", "🔄 Transferir B+"],
+                ["💵 Depositar B+", "💸 Sacar B+", "🔄 Transferir B+"],
                 horizontal=True,
                 key="prof_op_radio"
             )
             st.divider()
 
-            if operacao == "💸 Sacar B+":
-                st.markdown("#### Solicitar Saque de B+ da conta de um aluno da turma")
-                target_student = st.selectbox("Selecione o Aluno", class_student_names, key="prof_with_student")
-                with_amount = st.number_input("Valor do Saque (B+)", min_value=0.01, value=10.0, step=5.0, key="prof_with_val")
+            if operacao == "💵 Depositar B+":
+                st.markdown(f"#### Solicitar Depósito de B+ para alunos da turma ({class_name})")
+                selected_students = st.multiselect(
+                    "Selecione os Alunos da Turma",
+                    class_student_names,
+                    placeholder="Escolha um ou mais alunos da sua turma...",
+                    key="prof_dep_students"
+                )
 
-                if st.button("Solicitar Saque", type="primary", key="btn_prof_with"):
-                    desc = f"Saque solicitado pelo professor ({current_user})"
-                    success, msg = request_withdraw(current_user, "Professor", target_student, with_amount, description=desc)
-                    if success:
-                        st.success(f"✅ {msg}")
-                    else:
-                        st.error(f"❌ {msg}")
+                if not selected_students:
+                    st.info("Selecione pelo menos um aluno da sua turma para definir valores e motivos.")
+                else:
+                    dep_entries = {}
+                    for std in selected_students:
+                        curr_bal = float(get_balance(std))
+                        with st.container(border=True):
+                            st.markdown(f"👤 **{std}** — 💰 Saldo atual: **{curr_bal:.2f} B+**")
+                            col_val, col_reason = st.columns([1, 2])
+                            with col_val:
+                                val = st.number_input(
+                                    "Valor do Depósito (B+)",
+                                    min_value=0.01,
+                                    value=10.0,
+                                    step=5.0,
+                                    key=f"prof_dep_val_{std}"
+                                )
+                            with col_reason:
+                                reason = st.text_input(
+                                    "Motivo do depósito",
+                                    placeholder="Ex: Tarefa concluída / Bom comportamento",
+                                    key=f"prof_dep_reason_{std}"
+                                )
+                            dep_entries[std] = (val, reason)
 
-                current_bal = float(get_balance(target_student))
-                pending_out = get_pending_outgoing_amount(target_student)
-                st.caption(f"Saldo atual de **{target_student}**: **{current_bal:.2f} B+** | Pendente de aprovação: **{pending_out:.2f} B+**")
+                    if st.button("Solicitar Depósitos", type="primary", key="btn_prof_dep"):
+                        for std, (val, reason) in dep_entries.items():
+                            success, msg = request_deposit(current_user, "Professor", std, val, reason=reason)
+                            if success:
+                                st.success(f"✅ {msg}")
+                            else:
+                                st.error(f"❌ {msg}")
+
+            elif operacao == "💸 Sacar B+":
+                st.markdown(f"#### Solicitar Saque de B+ para alunos da turma ({class_name})")
+                selected_students = st.multiselect(
+                    "Selecione os Alunos da Turma",
+                    class_student_names,
+                    placeholder="Escolha um ou mais alunos da sua turma...",
+                    key="prof_with_students"
+                )
+
+                if not selected_students:
+                    st.info("Selecione pelo menos um aluno da sua turma para definir valores e motivos.")
+                else:
+                    with_entries = {}
+                    for std in selected_students:
+                        curr_bal = float(get_balance(std))
+                        pending_out = get_pending_outgoing_amount(std)
+                        with st.container(border=True):
+                            st.markdown(
+                                f"👤 **{std}** — 💰 Saldo atual: **{curr_bal:.2f} B+** | "
+                                f"⏳ Pendente: **{pending_out:.2f} B+**"
+                            )
+                            col_val, col_reason = st.columns([1, 2])
+                            with col_val:
+                                val = st.number_input(
+                                    "Valor do Saque (B+)",
+                                    min_value=0.01,
+                                    value=10.0,
+                                    step=5.0,
+                                    key=f"prof_with_val_{std}"
+                                )
+                            with col_reason:
+                                reason = st.text_input(
+                                    "Motivo do saque",
+                                    placeholder="Ex: Compra na feirinha da turma",
+                                    key=f"prof_with_reason_{std}"
+                                )
+                            with_entries[std] = (val, reason)
+
+                    if st.button("Solicitar Saques", type="primary", key="btn_prof_with"):
+                        for std, (val, reason) in with_entries.items():
+                            reason_clean = reason.strip() if reason else ""
+                            base_desc = f"Saque solicitado pelo professor ({current_user})"
+                            full_desc = f"{base_desc} | Motivo: {reason_clean}" if reason_clean else base_desc
+                            success, msg = request_withdraw(current_user, "Professor", std, val, description=full_desc)
+                            if success:
+                                st.success(f"✅ {msg}")
+                            else:
+                                st.error(f"❌ {msg}")
 
             elif operacao == "🔄 Transferir B+":
                 st.markdown("#### Solicitar Transferência de B+ entre alunos da turma")
@@ -1341,12 +1554,26 @@ elif st.session_state["user_type"] == 3:
                 req_rows = []
                 for rq in prof_reqs:
                     st_label = "⏳ PENDENTE" if rq["status"] == "PENDENTE" else ("✅ APROVADA" if rq["status"] == "APROVADA" else "❌ REPROVADA")
+                    if rq["op_type"] == "DEPOSITO":
+                        tipo_label = "Depósito"
+                        origem_label = "ADMIN / DEPÓSITO"
+                        destino_label = rq["receiver_username"]
+                    elif rq["op_type"] == "SAQUE":
+                        tipo_label = "Saque"
+                        origem_label = rq["sender_username"]
+                        destino_label = "CAIXA / SAQUE"
+                    else:
+                        tipo_label = "Transferência"
+                        origem_label = rq["sender_username"]
+                        destino_label = rq["receiver_username"]
+
                     req_rows.append({
                         "ID": rq["id"],
-                        "Tipo": "Saque" if rq["op_type"] == "SAQUE" else "Transferência",
-                        "Origem": rq["sender_username"],
-                        "Destino": rq["receiver_username"] or "CAIXA / SAQUE",
+                        "Tipo": tipo_label,
+                        "Origem": origem_label,
+                        "Destino": destino_label,
                         "Valor (B+)": f"{float(rq['amount']):.2f}",
+                        "Motivo / Descrição": rq["description"] or "-",
                         "Status": st_label,
                         "Obs. Admin": rq["review_note"] or "-",
                         "Data": str(rq["created_at"])
@@ -1468,7 +1695,7 @@ else:
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
         st.divider()
-        st.subheader("Status de Solicitações (Saques e Transferências)")
+        st.subheader("Status de Solicitações (Depósitos, Saques e Transferências)")
         student_reqs = get_user_operation_requests(current_user)
         if not student_reqs:
             st.info("Nenhuma solicitação registrada.")
@@ -1476,12 +1703,26 @@ else:
             req_records = []
             for rq in student_reqs:
                 st_label = "⏳ PENDENTE" if rq["status"] == "PENDENTE" else ("✅ APROVADA" if rq["status"] == "APROVADA" else "❌ REPROVADA")
+                if rq["op_type"] == "DEPOSITO":
+                    tipo_label = "Depósito"
+                    origem_label = "ADMIN / DEPÓSITO"
+                    destino_label = rq["receiver_username"]
+                elif rq["op_type"] == "SAQUE":
+                    tipo_label = "Saque"
+                    origem_label = rq["sender_username"]
+                    destino_label = "CAIXA / SAQUE"
+                else:
+                    tipo_label = "Transferência"
+                    origem_label = rq["sender_username"]
+                    destino_label = rq["receiver_username"]
+
                 req_records.append({
                     "ID": rq["id"],
-                    "Tipo": "Saque" if rq["op_type"] == "SAQUE" else "Transferência",
-                    "Origem": rq["sender_username"],
-                    "Destino": rq["receiver_username"] or "CAIXA / SAQUE",
+                    "Tipo": tipo_label,
+                    "Origem": origem_label,
+                    "Destino": destino_label,
                     "Valor (B+)": f"{float(rq['amount']):.2f}",
+                    "Motivo / Descrição": rq["description"] or "-",
                     "Status": st_label,
                     "Obs. Admin": rq["review_note"] or "-",
                     "Data": str(rq["created_at"])
