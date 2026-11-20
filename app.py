@@ -54,7 +54,7 @@ def logout():
 # ROTEAMENTO DE TELAS
 # ==========================================
 if st.session_state["user"] is None:
-    st.title("🪙 B+ Bank Teste - Acesso ao Sistema")
+    st.title("🪙 B+ Bank - Acesso ao Sistema")
     
     with st.form("login_form"):
         user_input = st.text_input("Usuário")
