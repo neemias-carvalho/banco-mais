@@ -366,7 +366,6 @@ def render_admin_dashboard(logout_callback):
                                 ok, msg = db.approve_operation(oid, st.session_state["user"], final_note)
                                 feedback.append(("success" if ok else "error", f"{'✅' if ok else '❌'} {msg}"))
                                 st.session_state.pop(f"val_chk_{oid}", None)
-                            st.session_state["val_select_all"] = False
                             st.session_state["val_batch_feedback"] = feedback
                             st.rerun()
 
@@ -385,7 +384,6 @@ def render_admin_dashboard(logout_callback):
                                 ok, msg = db.reject_operation(oid, st.session_state["user"], final_note)
                                 feedback.append(("success" if ok else "error", f"{'🚫' if ok else '❌'} {msg}"))
                                 st.session_state.pop(f"val_chk_{oid}", None)
-                            st.session_state["val_select_all"] = False
                             st.session_state["val_batch_feedback"] = feedback
                             st.rerun()
 
