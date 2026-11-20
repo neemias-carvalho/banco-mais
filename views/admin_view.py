@@ -2,6 +2,30 @@ import pandas as pd
 import streamlit as st
 import backend as db
 
+
+def _op_matches_school(op, selected_school):
+    if selected_school == "Todas as escolas":
+        return True
+    if op["op_type"] == "DEPOSITO":
+        return op["receiver_school"] == selected_school
+    if op["op_type"] == "SAQUE":
+        return op["sender_school"] == selected_school
+    return op["sender_school"] == selected_school or op["receiver_school"] == selected_school
+
+
+def _clear_val_selections():
+    st.session_state["val_select_all"] = False
+    for key in list(st.session_state.keys()):
+        if key.startswith("val_chk_"):
+            st.session_state[key] = False
+
+
+def _toggle_select_all(op_ids):
+    target_state = st.session_state.get("val_select_all", False)
+    for oid in op_ids:
+        st.session_state[f"val_chk_{oid}"] = target_state
+
+
 def render_admin_dashboard(logout_callback):
     st.sidebar.title("🛡️ Painel Admin")
     st.sidebar.write(f"Conectado como: **{st.session_state['user']}**")
@@ -249,60 +273,177 @@ def render_admin_dashboard(logout_callback):
 
     with tab_validation:
         st.subheader("Validação de Depósitos, Saques e Transferências")
+
+        # Exibe feedback de ações em lote realizadas antes do rerun
+        batch_feedback = st.session_state.pop("val_batch_feedback", None)
+        if batch_feedback:
+            for level, text in batch_feedback:
+                if level == "success":
+                    st.success(text)
+                else:
+                    st.error(text)
+
         pending_ops = db.get_pending_operations()
 
         if not pending_ops:
             st.info("Não há operações pendentes de aprovação no momento.")
         else:
-            st.caption(f"Total de solicitações aguardando validação: **{len(pending_ops)}**")
-            for op in pending_ops:
-                op_id = op["id"]
-                if op["op_type"] == "DEPOSITO":
-                    op_label = "💵 Depósito"
-                elif op["op_type"] == "SAQUE":
-                    op_label = "💸 Saque"
-                else:
-                    op_label = "🔄 Transferência"
+            # 1. Filtro por escola
+            registered_schools = [s["name"] for s in db.get_schools()]
+            ops_schools = {
+                op["receiver_school"] if op["op_type"] == "DEPOSITO" else op["sender_school"]
+                for op in pending_ops
+            }
+            all_school_names = sorted(set(registered_schools) | {s for s in ops_schools if s and s != "N/A"})
+            if "N/A" in ops_schools:
+                all_school_names.append("N/A")
 
-                amt = float(op["amount"])
+            school_filter_options = ["Todas as escolas"] + all_school_names
+            selected_school = st.selectbox(
+                "🏫 Filtrar solicitações por escola:",
+                school_filter_options,
+                key="val_school_filter",
+                on_change=_clear_val_selections
+            )
+
+            filtered_ops = [op for op in pending_ops if _op_matches_school(op, selected_school)]
+
+            if not filtered_ops:
+                st.info(f"Não há solicitações pendentes para **{selected_school}**.")
+            else:
+                filtered_op_ids = [op["id"] for op in filtered_ops]
+
+                # Garante inicialização dos checkboxes individuais e sincroniza o "Selecionar todas"
+                for oid in filtered_op_ids:
+                    if f"val_chk_{oid}" not in st.session_state:
+                        st.session_state[f"val_chk_{oid}"] = False
+
+                st.session_state["val_select_all"] = all(
+                    st.session_state.get(f"val_chk_{oid}", False) for oid in filtered_op_ids
+                )
+
+                selected_op_ids = [
+                    oid for oid in filtered_op_ids if st.session_state.get(f"val_chk_{oid}", False)
+                ]
+
+                # 3. Barra superior: selecionar todas + aprovar/reprovar múltiplas solicitações
                 with st.container(border=True):
-                    col_info, col_actions = st.columns([3, 2])
-                    with col_info:
-                        st.markdown(f"**#{op_id} — {op_label} de {amt:.2f} B+**")
-                        st.write(f"**Solicitante:** {op['requester_username']} ({op['requester_role']})")
-                        if op["op_type"] == "DEPOSITO":
-                            st.write(f"**Conta Beneficiada:** {op['receiver_username']} | **Escola:** {op['receiver_school']} ({op['receiver_class']})")
-                        elif op["op_type"] == "SAQUE":
-                            st.write(f"**Conta do Aluno:** {op['sender_username']} | **Escola:** {op['sender_school']} ({op['sender_class']})")
-                        else:
-                            st.write(f"**De:** {op['sender_username']} ({op['sender_school']}) ➡️ **Para:** {op['receiver_username']} ({op['receiver_school']})")
-                        if op["description"]:
-                            st.caption(f"Descrição / Motivo: {op['description']}")
-                        st.caption(f"Solicitado em: {op['created_at']}")
-
-                    with col_actions:
-                        note_input = st.text_input(
-                            "Observação / Motivo (opcional)",
-                            key=f"note_op_{op_id}",
-                            placeholder="Ex: Validado em sala"
+                    top_col1, top_col2 = st.columns([3, 2])
+                    with top_col1:
+                        st.checkbox(
+                            "Selecionar todas as solicitações listadas",
+                            key="val_select_all",
+                            on_change=_toggle_select_all,
+                            args=(filtered_op_ids,)
                         )
-                        btn_col1, btn_col2 = st.columns(2)
-                        with btn_col1:
-                            if st.button("✅ Aprovar", key=f"approve_op_{op_id}", type="primary", use_container_width=True):
-                                ok, msg = db.approve_operation(op_id, st.session_state["user"], note_input)
-                                if ok:
-                                    st.toast(f"✅ {msg}")
-                                    st.rerun()
-                                else:
-                                    st.error(f"❌ {msg}")
-                        with btn_col2:
-                            if st.button("❌ Reprovar", key=f"reject_op_{op_id}", type="secondary", use_container_width=True):
-                                ok, msg = db.reject_operation(op_id, st.session_state["user"], note_input)
-                                if ok:
-                                    st.toast(f"🚫 {msg}")
-                                    st.rerun()
-                                else:
-                                    st.error(f"❌ {msg}")
+                    with top_col2:
+                        st.markdown(
+                            f"<div style='text-align: right; padding-top: 6px;'>"
+                            f"<b>{len(selected_op_ids)}</b> de <b>{len(filtered_ops)}</b> selecionada(s) "
+                            f"(Total pendente: {len(pending_ops)})</div>",
+                            unsafe_allow_html=True
+                        )
+
+                    batch_note = st.text_input(
+                        "Observação em lote (opcional)",
+                        key="val_batch_note",
+                        placeholder="Ex: Validado em lote por escola"
+                    )
+
+                    batch_btn_col1, batch_btn_col2 = st.columns(2)
+                    with batch_btn_col1:
+                        if st.button(
+                            f"✅ Aprovar Selecionadas ({len(selected_op_ids)})",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=len(selected_op_ids) == 0,
+                            key="btn_batch_approve"
+                        ):
+                            feedback = []
+                            for oid in selected_op_ids:
+                                indiv_note = st.session_state.get(f"note_op_{oid}", "").strip()
+                                final_note = indiv_note if indiv_note else batch_note
+                                ok, msg = db.approve_operation(oid, st.session_state["user"], final_note)
+                                feedback.append(("success" if ok else "error", f"{'✅' if ok else '❌'} {msg}"))
+                                st.session_state.pop(f"val_chk_{oid}", None)
+                            st.session_state["val_select_all"] = False
+                            st.session_state["val_batch_feedback"] = feedback
+                            st.rerun()
+
+                    with batch_btn_col2:
+                        if st.button(
+                            f"❌ Reprovar Selecionadas ({len(selected_op_ids)})",
+                            type="secondary",
+                            use_container_width=True,
+                            disabled=len(selected_op_ids) == 0,
+                            key="btn_batch_reject"
+                        ):
+                            feedback = []
+                            for oid in selected_op_ids:
+                                indiv_note = st.session_state.get(f"note_op_{oid}", "").strip()
+                                final_note = indiv_note if indiv_note else batch_note
+                                ok, msg = db.reject_operation(oid, st.session_state["user"], final_note)
+                                feedback.append(("success" if ok else "error", f"{'🚫' if ok else '❌'} {msg}"))
+                                st.session_state.pop(f"val_chk_{oid}", None)
+                            st.session_state["val_select_all"] = False
+                            st.session_state["val_batch_feedback"] = feedback
+                            st.rerun()
+
+                # 2. Lista de solicitações com checkbox individual
+                for op in filtered_ops:
+                    op_id = op["id"]
+                    if op["op_type"] == "DEPOSITO":
+                        op_label = "💵 Depósito"
+                    elif op["op_type"] == "SAQUE":
+                        op_label = "💸 Saque"
+                    else:
+                        op_label = "🔄 Transferência"
+
+                    amt = float(op["amount"])
+                    with st.container(border=True):
+                        st.checkbox(
+                            f"Selecionar solicitação #{op_id}",
+                            key=f"val_chk_{op_id}"
+                        )
+                        col_info, col_actions = st.columns([3, 2])
+                        with col_info:
+                            st.markdown(f"**#{op_id} — {op_label} de {amt:.2f} B+**")
+                            st.write(f"**Solicitante:** {op['requester_username']} ({op['requester_role']})")
+                            if op["op_type"] == "DEPOSITO":
+                                st.write(f"**Conta Beneficiada:** {op['receiver_username']} | **Escola:** {op['receiver_school']} ({op['receiver_class']})")
+                            elif op["op_type"] == "SAQUE":
+                                st.write(f"**Conta do Aluno:** {op['sender_username']} | **Escola:** {op['sender_school']} ({op['sender_class']})")
+                            else:
+                                st.write(f"**De:** {op['sender_username']} ({op['sender_school']}) ➡️ **Para:** {op['receiver_username']} ({op['receiver_school']})")
+                            if op["description"]:
+                                st.caption(f"Descrição / Motivo: {op['description']}")
+                            st.caption(f"Solicitado em: {op['created_at']}")
+
+                        with col_actions:
+                            note_input = st.text_input(
+                                "Observação / Motivo (opcional)",
+                                key=f"note_op_{op_id}",
+                                placeholder="Ex: Validado em sala"
+                            )
+                            btn_col1, btn_col2 = st.columns(2)
+                            with btn_col1:
+                                if st.button("✅ Aprovar", key=f"approve_op_{op_id}", type="primary", use_container_width=True):
+                                    ok, msg = db.approve_operation(op_id, st.session_state["user"], note_input)
+                                    if ok:
+                                        st.session_state.pop(f"val_chk_{op_id}", None)
+                                        st.toast(f"✅ {msg}")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ {msg}")
+                            with btn_col2:
+                                if st.button("❌ Reprovar", key=f"reject_op_{op_id}", type="secondary", use_container_width=True):
+                                    ok, msg = db.reject_operation(op_id, st.session_state["user"], note_input)
+                                    if ok:
+                                        st.session_state.pop(f"val_chk_{op_id}", None)
+                                        st.toast(f"🚫 {msg}")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ {msg}")
 
         st.divider()
         st.subheader("Histórico Detalhado de Operações Validadas")
