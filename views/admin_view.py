@@ -56,8 +56,10 @@ def render_admin_dashboard(logout_callback):
 
     with tab_schools:
         st.subheader("Cadastrar Nova Escola")
-        school_name = st.text_input("Nome da Escola", placeholder="Ex: Escola Estadual Machado de Assis")
-        if st.button("Salvar Escola", type="primary"):
+        with st.form("form_add_school", clear_on_submit=True):
+            school_name = st.text_input("Nome da Escola", placeholder="Ex: Escola Estadual Machado de Assis")
+            submitted_school = st.form_submit_button("Salvar Escola", type="primary")
+        if submitted_school:
             success, msg = db.add_school(school_name)
             if success:
                 st.success(f"✅ {msg}")
@@ -72,9 +74,10 @@ def render_admin_dashboard(logout_callback):
         else:
             school_dict = {s['name']: s['id'] for s in schools}
             sel_school = st.selectbox("Selecione a Escola", list(school_dict.keys()), key="class_school_select")
-            class_name = st.text_input("Nome da Classe", placeholder="Ex: 5º Ano A")
-            
-            if st.button("Salvar Classe", type="primary"):
+            with st.form("form_add_class", clear_on_submit=True):
+                class_name = st.text_input("Nome da Classe", placeholder="Ex: 5º Ano A")
+                submitted_class = st.form_submit_button("Salvar Classe", type="primary")
+            if submitted_class:
                 success, msg = db.add_class(class_name, school_dict[sel_school])
                 if success:
                     st.success(f"✅ {msg}")
@@ -97,11 +100,13 @@ def render_admin_dashboard(logout_callback):
                 class_dict = {c['name']: c['id'] for c in classes}
                 sel_class_teacher = st.selectbox("Classe/Turma do Professor", list(class_dict.keys()), key="teacher_class")
                 
-                prof_user = st.text_input("Usuário do Professor", key="prof_user")
-                prof_pass = st.text_input("Senha", type="password", key="prof_pass")
-                prof_pass_conf = st.text_input("Confirmar Senha", type="password", key="prof_pass_conf")
+                with st.form("form_add_teacher", clear_on_submit=True):
+                    prof_user = st.text_input("Usuário do Professor")
+                    prof_pass = st.text_input("Senha", type="password")
+                    prof_pass_conf = st.text_input("Confirmar Senha", type="password")
+                    submitted_teacher = st.form_submit_button("Salvar Professor", type="primary")
                 
-                if st.button("Salvar Professor", type="primary"):
+                if submitted_teacher:
                     success, msg = db.register_teacher(
                         prof_user, prof_pass, prof_pass_conf, 
                         school_dict[sel_school_teacher], class_dict[sel_class_teacher]
@@ -127,11 +132,13 @@ def render_admin_dashboard(logout_callback):
                 class_dict = {c['name']: c['id'] for c in classes}
                 sel_class_student = st.selectbox("Classe do Aluno", list(class_dict.keys()), key="student_class")
                 
-                std_user = st.text_input("Usuário do Aluno")
-                std_pass = st.text_input("Senha", type="password")
-                std_pass_conf = st.text_input("Confirmar Senha", type="password")
+                with st.form("form_add_student", clear_on_submit=True):
+                    std_user = st.text_input("Usuário do Aluno")
+                    std_pass = st.text_input("Senha", type="password")
+                    std_pass_conf = st.text_input("Confirmar Senha", type="password")
+                    submitted_student = st.form_submit_button("Salvar Aluno", type="primary")
                 
-                if st.button("Salvar Aluno", type="primary"):
+                if submitted_student:
                     success, msg = db.register_student(
                         std_user, std_pass, std_pass_conf, 
                         school_dict[sel_school_student], class_dict[sel_class_student]
@@ -274,7 +281,6 @@ def render_admin_dashboard(logout_callback):
     with tab_validation:
         st.subheader("Validação de Depósitos, Saques e Transferências")
 
-        # Exibe feedback de ações em lote realizadas antes do rerun
         batch_feedback = st.session_state.pop("val_batch_feedback", None)
         if batch_feedback:
             for level, text in batch_feedback:
@@ -288,7 +294,6 @@ def render_admin_dashboard(logout_callback):
         if not pending_ops:
             st.info("Não há operações pendentes de aprovação no momento.")
         else:
-            # 1. Filtro por escola
             registered_schools = [s["name"] for s in db.get_schools()]
             ops_schools = {
                 op["receiver_school"] if op["op_type"] == "DEPOSITO" else op["sender_school"]
@@ -313,7 +318,6 @@ def render_admin_dashboard(logout_callback):
             else:
                 filtered_op_ids = [op["id"] for op in filtered_ops]
 
-                # Garante inicialização dos checkboxes individuais e sincroniza o "Selecionar todas"
                 for oid in filtered_op_ids:
                     if f"val_chk_{oid}" not in st.session_state:
                         st.session_state[f"val_chk_{oid}"] = False
@@ -326,7 +330,6 @@ def render_admin_dashboard(logout_callback):
                     oid for oid in filtered_op_ids if st.session_state.get(f"val_chk_{oid}", False)
                 ]
 
-                # 3. Barra superior: selecionar todas + aprovar/reprovar múltiplas solicitações
                 with st.container(border=True):
                     top_col1, top_col2 = st.columns([3, 2])
                     with top_col1:
@@ -387,7 +390,6 @@ def render_admin_dashboard(logout_callback):
                             st.session_state["val_batch_feedback"] = feedback
                             st.rerun()
 
-                # 2. Lista de solicitações com checkbox individual
                 for op in filtered_ops:
                     op_id = op["id"]
                     if op["op_type"] == "DEPOSITO":
