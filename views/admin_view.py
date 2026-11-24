@@ -26,6 +26,68 @@ def _toggle_select_all(op_ids):
         st.session_state[f"val_chk_{oid}"] = target_state
 
 
+def _render_edit_profile_section(users_records, username_col, role_label, key_prefix):
+    st.divider()
+    st.subheader(f"✏️ Editar Escola e Turma ({role_label})")
+
+    schools = db.get_schools()
+    if not schools:
+        st.warning("Nenhuma escola cadastrada no sistema.")
+        return
+
+    user_map = {row[username_col]: row for row in users_records}
+    usernames = list(user_map.keys())
+
+    sel_user = st.selectbox(
+        f"Selecione o {role_label}:",
+        usernames,
+        key=f"{key_prefix}_edit_user"
+    )
+
+    current_school_name = user_map[sel_user]["Escola"]
+    current_class_name = user_map[sel_user]["Classe"]
+    st.caption(f"Vínculo atual: **Escola:** {current_school_name} | **Turma:** {current_class_name}")
+
+    school_dict = {s["name"]: s["id"] for s in schools}
+    school_names = list(school_dict.keys())
+    default_sch_idx = school_names.index(current_school_name) if current_school_name in school_names else 0
+
+    sel_school = st.selectbox(
+        "Nova Escola:",
+        school_names,
+        index=default_sch_idx,
+        key=f"{key_prefix}_edit_school"
+    )
+
+    classes = db.get_classes_by_school(school_dict[sel_school])
+    if not classes:
+        st.warning("Esta escola ainda não possui turmas cadastradas.")
+        return
+
+    class_dict = {c["name"]: c["id"] for c in classes}
+    class_names = list(class_dict.keys())
+    default_cls_idx = class_names.index(current_class_name) if current_class_name in class_names else 0
+
+    sel_class = st.selectbox(
+        "Nova Turma:",
+        class_names,
+        index=default_cls_idx,
+        key=f"{key_prefix}_edit_class"
+    )
+
+    if st.button(f"Salvar Alterações de {sel_user}", type="primary", key=f"{key_prefix}_edit_save"):
+        ok, msg = db.update_user_school_and_class(
+            sel_user,
+            school_dict[sel_school],
+            class_dict[sel_class]
+        )
+        if ok:
+            st.toast(f"✅ {msg}")
+            st.rerun()
+        else:
+            st.error(f"❌ {msg}")
+
+
 def render_admin_dashboard(logout_callback):
     st.sidebar.title("🛡️ Painel Admin")
     st.sidebar.write(f"Conectado como: **{st.session_state['user']}**")
@@ -42,6 +104,7 @@ def render_admin_dashboard(logout_callback):
         tab_finance,
         tab_validation,
         tab_list_students,
+        tab_list_teachers,
         tab_list_schools,
     ) = st.tabs([
         "🏫 Escolas", 
@@ -51,6 +114,7 @@ def render_admin_dashboard(logout_callback):
         "💰 Operações Financeiras",
         "✅ Validação de Operações",
         "📋 Lista de Alunos",
+        "👨‍🏫 Lista de Professores",
         "🏢 Lista de Escolas"
     ])
 
@@ -509,6 +573,18 @@ def render_admin_dashboard(logout_callback):
             st.caption(f"Total de alunos cadastrados: **{len(students)}**")
             df_students = pd.DataFrame(students)
             st.dataframe(df_students, use_container_width=True, hide_index=True)
+            _render_edit_profile_section(students, "Aluno", "Aluno", "adm_std")
+
+    with tab_list_teachers:
+        st.subheader("Lista de Todos os Professores Cadastrados")
+        teachers = db.get_all_teachers()
+        if not teachers:
+            st.info("Nenhum professor cadastrado no momento.")
+        else:
+            st.caption(f"Total de professores cadastrados: **{len(teachers)}**")
+            df_teachers = pd.DataFrame(teachers)
+            st.dataframe(df_teachers, use_container_width=True, hide_index=True)
+            _render_edit_profile_section(teachers, "Professor", "Professor", "adm_prof")
 
     with tab_list_schools:
         st.subheader("Lista de Todas as Escolas Cadastradas")
