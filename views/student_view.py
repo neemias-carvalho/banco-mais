@@ -184,6 +184,3 @@ def render_student_dashboard(logout_callback):
                 st.rerun()
             else:
                 st.error(f"❌ {msg}")
-```[cite: 22]
-
-*(Nota: o `st.rerun()` faz uma nova renderização no Streamlit pelo servidor — o que para o usuário final acontece na mesma hora sem precisar recarregar a página —, mas não é um push em tempo real para outras telas abertas em outros navegadores).*
