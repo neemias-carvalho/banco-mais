@@ -2,7 +2,6 @@ import pandas as pd
 import streamlit as st
 import backend as db
 
-
 def render_student_dashboard(logout_callback):
     current_user = st.session_state["user"]
     student_school_id = st.session_state["school_id"]
@@ -25,9 +24,9 @@ def render_student_dashboard(logout_callback):
         st.caption(f"⏳ Você possui **{pending_out:.2f} B+** em solicitações aguardando aprovação do administrador.")
 
     tab_transfer, tab_withdraw, tab_history, tab_settings = st.tabs([
-        "💸 Transferir",
-        "💵 Sacar",
-        "📜 Extrato",
+        "💸 Transferir", 
+        "💵 Sacar", 
+        "📜 Extrato", 
         "🔑 Alterar Senha"
     ])
 
@@ -81,7 +80,7 @@ def render_student_dashboard(logout_callback):
         st.caption("ℹ️ O saque será efetivado após aprovação do administrador.")
         max_avail = max(1.0, balance - pending_out)
         valor_saque = st.number_input("Valor do Saque (B+)", min_value=1.0, max_value=max_avail, value=min(10.0, max_avail), step=5.0)
-
+        
         if st.button("Solicitar Saque", type="primary"):
             success, msg = db.request_withdraw(current_user, "Aluno", current_user, valor_saque, description="Saque solicitado pelo aluno")
             if success:
@@ -111,7 +110,7 @@ def render_student_dashboard(logout_callback):
                     tipo = "RECEBIMENTO ⬇️"
                     outro = f"De: {sender}"
                     val_str = f"+{amt:.2f} B+"
-
+                
                 records.append({
                     "Tipo": tipo,
                     "Origem/Destino": outro,
@@ -119,7 +118,7 @@ def render_student_dashboard(logout_callback):
                     "Valor": val_str,
                     "Data/Hora": str(timestamp)
                 })
-
+            
             df_hist = pd.DataFrame(records)
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
@@ -160,30 +159,12 @@ def render_student_dashboard(logout_callback):
 
     with tab_settings:
         st.subheader("Alterar Senha")
-
-        if st.session_state.pop("student_clear_pass_fields", False):
-            st.session_state["s_old_p"] = ""
-            st.session_state["s_new_p"] = ""
-
-        pass_feedback = st.session_state.pop("student_pass_feedback", None)
-        if pass_feedback:
-            level, text = pass_feedback
-            if level == "success":
-                st.success(text)
-            else:
-                st.error(text)
-
         old_p = st.text_input("Senha Atual", type="password", key="s_old_p")
         new_p = st.text_input("Nova Senha", type="password", key="s_new_p")
-
+        
         if st.button("Salvar Nova Senha", type="primary"):
             success, msg = db.change_password(current_user, old_p, new_p)
             if success:
-                st.session_state["student_pass_feedback"] = ("success", f"✅ {msg}")
-                st.session_state["student_clear_pass_fields"] = True
-                st.rerun()
+                st.success(f"✅ {msg}")
             else:
                 st.error(f"❌ {msg}")
-```[cite: 22]
-
-*(Nota: o `st.rerun()` faz uma nova renderização no Streamlit pelo servidor — o que para o usuário final acontece na mesma hora sem precisar recarregar a página —, mas não é um push em tempo real para outras telas abertas em outros navegadores).*
