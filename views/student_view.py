@@ -32,16 +32,44 @@ def render_student_dashboard(logout_callback):
 
     with tab_transfer:
         st.subheader("Transferência de B+")
-        st.caption(f"ℹ️ Você pode transferir B+ apenas para alunos da sua escola (**{school_name}**). A operação será efetivada após aprovação do administrador.")
-        other_users = db.get_other_users(current_user, student_school_id)
-        if not other_users:
-            st.info("Não há outros alunos cadastrados na sua escola para receber transferências.")
+        st.caption("ℹ️ Você pode solicitar transferência de B+ para alunos de qualquer escola e turma. A operação será efetivada após aprovação do administrador.")
+        grouped_students = db.get_students_grouped_by_school(exclude_username=current_user)
+        if not grouped_students:
+            st.info("Não há outros alunos cadastrados para receber transferências.")
         else:
-            destinatario = st.selectbox("Selecione o Destinatário (Mesma Escola)", other_users)
+            school_options = list(grouped_students.keys())
+            default_school_idx = school_options.index(school_name) if school_name in school_options else 0
+            selected_dest_school = st.selectbox(
+                "1. Selecione a Escola do Destinatário",
+                school_options,
+                index=default_school_idx,
+                key="student_transf_school"
+            )
+            school_students = grouped_students[selected_dest_school]
+            student_labels = [
+                f"{item['username']} ({item['class_name']})" for item in school_students
+            ]
+            label_to_username = {
+                f"{item['username']} ({item['class_name']})": item["username"]
+                for item in school_students
+            }
+            selected_label = st.selectbox(
+                f"2. Selecione o Destinatário ({selected_dest_school})",
+                student_labels,
+                key="student_transf_recipient"
+            )
+            destinatario = label_to_username[selected_label]
             valor_transf = st.number_input("Valor (B+)", min_value=1.0, value=10.0, step=5.0)
-            
+
             if st.button("Solicitar Envio", type="primary"):
-                success, msg = db.request_transfer(current_user, "Aluno", current_user, destinatario, valor_transf, description="Transferência solicitada pelo aluno")
+                success, msg = db.request_transfer(
+                    current_user,
+                    "Aluno",
+                    current_user,
+                    destinatario,
+                    valor_transf,
+                    description="Transferência solicitada pelo aluno"
+                )
                 if success:
                     st.success(f"✅ {msg}")
                 else:
