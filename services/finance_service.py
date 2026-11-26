@@ -125,10 +125,6 @@ def request_transfer(requester_username, requester_role, sender, receiver, amoun
                 if not rec_res:
                     return False, "Aluno destinatário não existe."
 
-                if requester_role == "Aluno":
-                    if not sender_res["school_id"] or sender_res["school_id"] != rec_res["school_id"]:
-                        return False, "Transferências de alunos só são permitidas para colegas da mesma escola."
-
                 sender_bal = float(sender_res["balance"])
                 cursor.execute(
                     """SELECT COALESCE(SUM(amount), 0) AS total 
