@@ -327,17 +327,62 @@ def get_students_by_school(school_id):
         conn.close()
 
 
-def get_other_users(current_username, school_id):
-    if not school_id:
-        return []
+def get_other_users(current_username, school_id=None):
     conn = get_db()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT username FROM users WHERE username != %s AND user_type = 1 AND school_id = %s ORDER BY username ASC",
-                (current_username, school_id)
-            )
+            if school_id is not None:
+                cursor.execute(
+                    "SELECT username FROM users WHERE username != %s AND user_type = 1 AND school_id = %s ORDER BY username ASC",
+                    (current_username, school_id)
+                )
+            else:
+                cursor.execute(
+                    "SELECT username FROM users WHERE username != %s AND user_type = 1 ORDER BY username ASC",
+                    (current_username,)
+                )
             return [row["username"] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_students_grouped_by_school(exclude_username=None):
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            if exclude_username:
+                cursor.execute(
+                    """SELECT u.username,
+                              COALESCE(s.name, 'Sem Escola') AS school_name,
+                              COALESCE(c.name, 'Sem Turma') AS class_name
+                       FROM users u
+                       LEFT JOIN schools s ON u.school_id = s.id
+                       LEFT JOIN classes c ON u.class_id = c.id
+                       WHERE u.user_type = 1 AND u.username != %s
+                       ORDER BY school_name ASC, class_name ASC, u.username ASC""",
+                    (exclude_username,)
+                )
+            else:
+                cursor.execute(
+                    """SELECT u.username,
+                              COALESCE(s.name, 'Sem Escola') AS school_name,
+                              COALESCE(c.name, 'Sem Turma') AS class_name
+                       FROM users u
+                       LEFT JOIN schools s ON u.school_id = s.id
+                       LEFT JOIN classes c ON u.class_id = c.id
+                       WHERE u.user_type = 1
+                       ORDER BY school_name ASC, class_name ASC, u.username ASC"""
+                )
+            rows = cursor.fetchall()
+            grouped = {}
+            for r in rows:
+                sch = r["school_name"]
+                grouped.setdefault(sch, []).append({
+                    "username": r["username"],
+                    "class_name": r["class_name"],
+                    "school_name": sch,
+                })
+            return grouped
     finally:
         conn.close()
 
