@@ -166,13 +166,9 @@ def register_student(username, password, confirm_password, school_id, class_id):
         with conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    """INSERT INTO users (username, salt, password_hash, balance, user_type, school_id, class_id) 
-                       VALUES (%s, %s, %s, %s, 1, %s, %s)""",
-                    (username, salt_hex, hash_hex, 100.0, school_id, class_id)
-                )
-                cursor.execute(
-                    "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
-                    ("SISTEMA", username, 100.0, "Bônus de boas-vindas")
+                    """INSERT INTO users (username, salt, password_hash, balance, user_type, school_id, class_id, welcome_bonus_claimed) 
+                       VALUES (%s, %s, %s, %s, 1, %s, %s, FALSE)""",
+                    (username, salt_hex, hash_hex, 0.0, school_id, class_id)
                 )
                 return True, f"Aluno '{username}' cadastrado com sucesso!"
     except psycopg2.IntegrityError:
