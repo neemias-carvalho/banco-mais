@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import backend as db
 
+
 def render_teacher_dashboard(logout_callback):
     current_user = st.session_state["user"]
     teacher_school_id = st.session_state["school_id"]
@@ -19,22 +20,24 @@ def render_teacher_dashboard(logout_callback):
     st.title("👨‍🏫 Portal do Professor")
     st.info(f"📍 **Escola Vinculada:** {school_name} | **Turma:** {class_name}")
 
-    tab_add_student, tab_finance, tab_school_students, tab_settings = st.tabs([
+    tab_add_student, tab_finance, tab_class_students, tab_settings = st.tabs([
         "➕ Cadastrar Aluno",
         "💰 Operações Financeiras",
-        "📋 Alunos da Escola", 
+        "📋 Alunos da Turma",
         "🔑 Alterar Senha"
     ])
 
     with tab_add_student:
         st.subheader(f"Cadastrar Aluno em {class_name}")
-        std_user = st.text_input("Usuário do Aluno", key="t_std_user")
-        std_pass = st.text_input("Senha", type="password", key="t_std_pass")
-        std_pass_conf = st.text_input("Confirmar Senha", type="password", key="t_std_pass_conf")
-        
-        if st.button("Cadastrar Aluno", type="primary"):
+        with st.form("form_teacher_add_student", clear_on_submit=True):
+            std_user = st.text_input("Usuário do Aluno")
+            std_pass = st.text_input("Senha", type="password")
+            std_pass_conf = st.text_input("Confirmar Senha", type="password")
+            submitted_student = st.form_submit_button("Cadastrar Aluno", type="primary")
+
+        if submitted_student:
             success, msg = db.register_student(
-                std_user, std_pass, std_pass_conf, 
+                std_user, std_pass, std_pass_conf,
                 teacher_school_id, teacher_class_id
             )
             if success:
@@ -209,21 +212,24 @@ def render_teacher_dashboard(logout_callback):
                     })
                 st.dataframe(pd.DataFrame(req_rows), use_container_width=True, hide_index=True)
 
-    with tab_school_students:
-        st.subheader(f"Alunos da Escola ({school_name})")
-        students = db.get_students_by_school(teacher_school_id)
+    with tab_class_students:
+        st.subheader(f"Alunos da Turma ({class_name})")
+        students = db.get_students_by_class(teacher_class_id)
         if not students:
-            st.info("Nenhum aluno cadastrado nesta escola ainda.")
+            st.info("Nenhum aluno cadastrado na sua turma ainda.")
         else:
+            st.caption(f"Total de alunos na turma: **{len(students)}**")
             df = pd.DataFrame(students)
             st.dataframe(df, use_container_width=True, hide_index=True)
 
     with tab_settings:
         st.subheader("Alterar Senha")
-        old_p = st.text_input("Senha Atual", type="password", key="t_old_p")
-        new_p = st.text_input("Nova Senha", type="password", key="t_new_p")
-        
-        if st.button("Salvar Nova Senha", type="primary"):
+        with st.form("form_teacher_change_pass", clear_on_submit=True):
+            old_p = st.text_input("Senha Atual", type="password")
+            new_p = st.text_input("Nova Senha", type="password")
+            submitted_pass = st.form_submit_button("Salvar Nova Senha", type="primary")
+
+        if submitted_pass:
             success, msg = db.change_password(current_user, old_p, new_p)
             if success:
                 st.success(f"✅ {msg}")

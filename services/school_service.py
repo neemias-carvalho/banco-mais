@@ -209,6 +209,45 @@ def get_all_students():
         conn.close()
 
 
+def get_all_teachers():
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT u.id AS "ID", u.username AS "Professor", 
+                       COALESCE(s.name, 'N/A') AS "Escola", 
+                       COALESCE(c.name, 'N/A') AS "Classe"
+                FROM users u 
+                LEFT JOIN schools s ON u.school_id = s.id 
+                LEFT JOIN classes c ON u.class_id = c.id 
+                WHERE u.user_type = 3 
+                ORDER BY u.id ASC
+            ''')
+            return [dict(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def update_user_school_and_class(username, school_id, class_id):
+    if not username or not school_id or not class_id:
+        return False, "Selecione um usuário, escola e turma válidos."
+    conn = get_db()
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE users SET school_id = %s, class_id = %s WHERE username = %s",
+                    (school_id, class_id, username)
+                )
+                if cursor.rowcount == 0:
+                    return False, f"Usuário '{username}' não encontrado."
+                return True, f"Escola e turma de '{username}' atualizadas com sucesso!"
+    except Exception as e:
+        return False, f"Erro ao atualizar perfil: {str(e)}"
+    finally:
+        conn.close()
+
+
 def get_all_student_usernames():
     conn = get_db()
     try:
@@ -230,6 +269,34 @@ def get_student_usernames_by_class(class_id):
                 (class_id,)
             )
             return [row["username"] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_students_by_class(class_id):
+    if not class_id:
+        return []
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT u.id AS "ID", u.username AS "Aluno", 
+                       COALESCE(s.name, 'N/A') AS "Escola", 
+                       COALESCE(c.name, 'N/A') AS "Classe",
+                       u.balance AS "Saldo (B+)"
+                FROM users u 
+                LEFT JOIN schools s ON u.school_id = s.id 
+                LEFT JOIN classes c ON u.class_id = c.id 
+                WHERE u.user_type = 1 AND u.class_id = %s
+                ORDER BY u.username ASC
+            ''', (class_id,))
+            rows = cursor.fetchall()
+            students = []
+            for r in rows:
+                r_dict = dict(r)
+                r_dict["Saldo (B+)"] = float(r_dict["Saldo (B+)"])
+                students.append(r_dict)
+            return students
     finally:
         conn.close()
 
