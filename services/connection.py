@@ -55,11 +55,17 @@ def init_db():
                         username TEXT UNIQUE NOT NULL,
                         salt TEXT NOT NULL,
                         password_hash TEXT NOT NULL,
-                        balance REAL DEFAULT 100.0,
+                        balance REAL DEFAULT 0.0,
                         user_type INTEGER DEFAULT 1,
                         school_id INTEGER REFERENCES schools(id),
-                        class_id INTEGER REFERENCES classes(id)
+                        class_id INTEGER REFERENCES classes(id),
+                        welcome_bonus_claimed BOOLEAN DEFAULT FALSE
                     )
+                ''')
+
+                cursor.execute('''
+                    ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS welcome_bonus_claimed BOOLEAN DEFAULT FALSE
                 ''')
 
                 cursor.execute('''
