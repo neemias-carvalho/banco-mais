@@ -30,6 +30,7 @@ from services.school_service import (
     get_students_by_class,
     get_students_by_school,
     get_other_users,
+    get_students_grouped_by_school,
     get_balance,
 )
 from services.finance_service import (
