@@ -86,7 +86,13 @@ def change_password(username, old_pass, new_pass):
     try:
         with conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT salt, password_hash FROM users WHERE username = %s", (username,))
+                cursor.execute(
+                    """SELECT salt, password_hash, user_type, COALESCE(welcome_bonus_claimed, FALSE) AS welcome_bonus_claimed
+                       FROM users
+                       WHERE username = %s
+                       FOR UPDATE""",
+                    (username,)
+                )
                 user = cursor.fetchone()
 
                 if not user or not verify_password(user["salt"], user["password_hash"], old_pass):
@@ -95,6 +101,21 @@ def change_password(username, old_pass, new_pass):
                     return False, "A nova senha deve ter pelo menos 4 caracteres."
 
                 new_salt, new_hash = hash_password(new_pass)
+                award_bonus = (user["user_type"] == 1 and not bool(user["welcome_bonus_claimed"]))
+
+                if award_bonus:
+                    cursor.execute(
+                        """UPDATE users
+                           SET salt = %s, password_hash = %s, balance = COALESCE(balance, 0) + %s, welcome_bonus_claimed = TRUE
+                           WHERE username = %s""",
+                        (new_salt, new_hash, 100.0, username)
+                    )
+                    cursor.execute(
+                        "INSERT INTO transactions (sender, receiver, amount, description) VALUES (%s, %s, %s, %s)",
+                        ("SISTEMA", username, 100.0, "Bônus de boas-vindas")
+                    )
+                    return True, "Senha alterada com sucesso! Você recebeu 100.00 B+ de bônus de boas-vindas!"
+
                 cursor.execute(
                     "UPDATE users SET salt = %s, password_hash = %s WHERE username = %s",
                     (new_salt, new_hash, username)
